@@ -3,7 +3,7 @@
  *
  */
 
-#include <smac/smac.h>
+#include "smac.h"
 
 // All stateful information goes in here
 static SMac_Struct spirMacState, *mac = &spirMacState;
@@ -129,7 +129,8 @@ Bool SMac_deregisterAllRx(Void)
 	return false;  // No callback was previously defined
 }
 
-static uint8_t SMac_RxRFQueue[RF_QUEUE_DATA_ENTRY_BUFFER_SIZE(SMAC_RXQUEUE_MAXDEPTH, SMAC_FRAMESIZE_ALLOCATION, 0)];
+#define RXQUEUEBUFSIZE RF_QUEUE_DATA_ENTRY_BUFFER_SIZE(SMAC_RXQUEUE_MAXDEPTH, SMAC_FRAMESIZE_ALLOCATION, 0)
+static uint8_t SMac_RxRFQueueBuffer[RXQUEUEBUFSIZE];
 
 Void SMac_init(Void)
 {
@@ -156,7 +157,7 @@ Void SMac_init(Void)
 
 	mac->allProgramCallback = NULL;
 
-	mac->RxQueueBuffer = SMac_RxRFQueue;
+	mac->RxQueueBuffer = &SMac_RxRFQueueBuffer[0];
 
 	mac->rxAddresses[0] = SMac_getIeeeAddress();  // Set this to chip-specific IEEE address (lower 32-bits should be unique among chips)
 	mac->rxAddresses[1] = 0;
@@ -503,11 +504,36 @@ static Void SMac_MainTaskFxn(UArg arg0, UArg arg1)
 	RF_cmdPropCarrierSense.rssiThr = -70;  // Signals above -70dBm indicate busy channel
 	RF_cmdPropCarrierSense.csEndTime = (2000 + 150) * 4;  // ~2ms wait before TX
 	RF_cmdNop.startTrigger.triggerType = TRIG_ABSTIME;
+	// TODO: Configure settings for RF_cmdPropTx
 
 	#ifdef SMAC_DEBUG
 	System_printf("SMac_MainTaskFxn: Pointer to state struct: %p\n", mac);
 	System_printf("SMac_MainTaskFxn: Pointers to TX RF: RF_cmdNop=%p, RF_cmdPropCarrierSense=%p, RF_cmdCountBranch=%p, RF_cmdPropTx=%p\n", &RF_cmdNop, &RF_cmdPropCarrierSense, &RF_cmdCountBranch, &RF_cmdPropTx); System_flush();
 	#endif
+
+	// Set up config for RX
+	if ( RFQueue_defineQueue(&mac->rxQueue, mac->RxQueueBuffer, RXQUEUEBUFSIZE, SMAC_RXQUEUE_MAXDEPTH, SMAC_FRAMESIZE_ALLOCATION) ) {
+		// error!
+		return;
+	}
+	RF_cmdPropRx.startTrigger.triggerType = TRIG_NOW;
+	RF_cmdPropRx.pktConf.bRepeatNok = 1;  // Keep listening after CRC error or after successful read
+	RF_cmdPropRx.pktConf.bRepeatOk = 1;
+	RF_cmdPropRx.pktConf.bVarLen = 1;  // Variable-size frames
+	RF_cmdPropRx.pktConf.bChkAddress = 1;  // Automatically check address byte
+	RF_cmdPropRx.pktConf.endType = 0;      // If sync started, continue RX until complete regardless of end trigger
+	RF_cmdPropRx.pktConf.filterOp = 0;
+	RF_cmdPropRx.pktConf.bUseCrc = 1;
+	RF_cmdPropRx.rxConf.bAutoFlushCrcErr = 1;
+	RF_cmdPropRx.rxConf.bAutoFlushIgnored = 1;
+	RF_cmdPropRx.rxConf.bIncludeHdr = 0;
+	RF_cmdPropRx.rxConf.bIncludeCrc = 0;
+	RF_cmdPropRx.rxConf.bAppendRssi = 1;
+	RF_cmdPropRx.rxConf.bAppendStatus = 0;
+	RF_cmdPropRx.maxPktLen = SMAC_MAXIMUM_FRAMESIZE;
+	RF_cmdPropRx.pOutput = 0;
+	RF_cmdPropRx.pQueue = &mac->rxQueue;
+
 
 	// Signal that we're ready to roll
 	Semaphore_post(mac->binsem_TxEmpty);
@@ -535,12 +561,10 @@ static Void SMac_MainTaskFxn(UArg arg0, UArg arg1)
 				#ifdef SMAC_DEBUG
 				System_printf("SMac_MainTaskFxn: Cleared secondary address\n"); System_flush();
 				#endif
-				RF_cmdPropRx.address1 = RF_cmdPropRx.address0;
 			} else {
 				#ifdef SMAC_DEBUG
 				System_printf("SMac_MainTaskFxn: Set secondary address: %x\n", mac->rxAddresses[1]); System_flush();
 				#endif
-				RF_cmdPropRx.address1 = mac->rxAddresses[1] & 0xFF;
 			}
 		}
 
@@ -828,6 +852,9 @@ static Void SMac_MainTaskFxn(UArg arg0, UArg arg1)
  */
 static Void SMac_RxCallbackFxn(RF_Handle h, RF_CmdHandle c, RF_EventMask e)
 {
+	#ifdef SMAC_DEBUG
+	System_printf("SMac_RxCallbackFxn: EventMask = %d\n", e); System_flush();
+	#endif
 	if (e & RF_EventRxEntryDone) {
 		Event_post(mac->mainTaskEvents, SMAC_EVT_RX);
 	}
@@ -950,10 +977,16 @@ static Void SMac_util_PrepareRxCmd(UInt32 timeoutMillis)
 {
 	// Step 1: Configure address matching
 	RF_cmdPropRx.address0 = (UInt8)mac->rxAddresses[0];
+	#ifdef SMAC_DEBUG
+	System_printf("SMac_util_PrepareRxCmd: address0=%02x for IEEEAddr=%08x\n", RF_cmdPropRx.address0, mac->rxAddresses[0]); System_flush();
+	#endif
 	if (mac->rxAddresses[1] == 0) {
 		RF_cmdPropRx.address1 = (UInt8)mac->rxAddresses[0];
 	} else {
 		RF_cmdPropRx.address1 = (UInt8)mac->rxAddresses[1];
+		#ifdef SMAC_DEBUG
+		System_printf("SMac_util_PrepareRxCmd: address1=%02x for AltAddr=%08x\n", RF_cmdPropRx.address1, mac->rxAddresses[1]); System_flush();
+		#endif
 	}
 
 	// Step 2: Configure endTime and trigger

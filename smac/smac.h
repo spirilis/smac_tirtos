@@ -47,7 +47,7 @@
 #define SMAC_MAINTASK_STACKSIZE 2048
 #endif
 
-#define SMAC_FRAMESIZE_ALLOCATION (SMAC_MAXIMUM_FRAMESIZE+2) //! @brief Needs to be >= SMAC_MAXIMUM_FRAMESIZE
+#define SMAC_FRAMESIZE_ALLOCATION (SMAC_MAXIMUM_FRAMESIZE+2) //! @brief Needs to be >= SMAC_MAXIMUM_FRAMESIZE, includes pktlen and RSSI
 static uint8_t SMac_Basestation[] = { 0xDE, 0xAD, 0xBE, 0xEF };  //! @brief Universal Base Station address
 typedef void(*SMac_RxCallback)(UInt32 srcAddr, UInt16 programID, UInt8 payloadLen, Void *payload);  // Packet callback function type
 
@@ -105,6 +105,7 @@ typedef struct {
 	Bool rfEnable;  //! @brief This will switch on & off particularly with TX-only nodes, and denotes whether RF_close/RF_open needs to run.
 	Mailbox_Handle queue_TxSubmit;
 	SMac_PacketInternal txQueue[SMAC_TXQUEUE_MAXDEPTH];
+	dataQueue_t rxQueue;
 	uint8_t *RxQueueBuffer;  //! @brief Must be assigned to a 32-bit aligned buffer
 	Semaphore_Handle binsem_rxSchedUpdate;  // Semaphore locking access to rxSched, rxSched_postTxMillis
 	volatile SMac_RxSchedule rxSched;
