@@ -6,8 +6,8 @@
 #include "smac.h"
 
 // All stateful information goes in here
-static SMac_Struct spirMacState, *mac = &spirMacState;
-static Semaphore_Struct _binsem_TxEmpty_Struct, _binsem_rxSchedUpdate_Struct, _binsem_regUpdate_Struct;
+static SMac_Struct sMacState, *mac = &sMacState;
+static Semaphore_Struct _binsem_TxEmpty_Struct, _binsem_rxSchedUpdate_Struct, _binsem_regUpdate_Struct, _binsem_RxOvf_Struct;
 static Mailbox_Struct _queue_TxSubmit_Struct;
 static Event_Struct _mainTaskEvents_Struct;
 static Task_Struct _mainTask_Struct;
@@ -27,6 +27,8 @@ static inline Int SMac_util_StuffPacket(Void *frameBuf, UInt startPos, SMac_Pack
 static inline SMac_RxCallback SMac_util_getCallbackByProgramID(UInt16);
 static inline Bool SMac_util_ValidateOurAddress(UInt32);
 static Void SMac_util_PrepareRxCmd(UInt32 timeoutMillis);
+static Void SMac_util_ConfigureRxQueues();
+static inline UInt SMac_util_GetRxQueueFreeCount();
 
 // Ripped from EasyLink - TX power settings
 typedef struct {
@@ -130,7 +132,7 @@ Bool SMac_deregisterAllRx(Void)
 }
 
 #define RXQUEUEBUFSIZE RF_QUEUE_DATA_ENTRY_BUFFER_SIZE(SMAC_RXQUEUE_MAXDEPTH, SMAC_FRAMESIZE_ALLOCATION, 0)
-static uint8_t SMac_RxRFQueueBuffer[RXQUEUEBUFSIZE];
+UInt8 SMac_RxRFQueueBuffer[RXQUEUEBUFSIZE];
 
 Void SMac_init(Void)
 {
@@ -170,14 +172,18 @@ Bool SMac_open(UInt32 freq, Int8 txpwr)
 
 	Semaphore_Params_init(&sP);
 	sP.mode = Semaphore_Mode_BINARY;
-	Semaphore_construct(&_binsem_TxEmpty_Struct, 1, &sP);
+	Semaphore_construct(&_binsem_TxEmpty_Struct, 0, &sP);
 	mac->binsem_TxEmpty = Semaphore_handle(&_binsem_TxEmpty_Struct);
 	Semaphore_construct(&_binsem_rxSchedUpdate_Struct, 1, &sP);
 	mac->binsem_rxSchedUpdate = Semaphore_handle(&_binsem_rxSchedUpdate_Struct);
 	Semaphore_construct(&_binsem_regUpdate_Struct, 1, &sP);
 	mac->binsem_regUpdate = Semaphore_handle(&_binsem_regUpdate_Struct);
+	Semaphore_construct(&_binsem_RxOvf_Struct, 0, &sP);
+	mac->binsem_RxOvf = Semaphore_handle(&_binsem_RxOvf_Struct);
 
-	Event_construct(&_mainTaskEvents_Struct, NULL);
+	Event_Params eP;
+	Event_Params_init(&eP);
+	Event_construct(&_mainTaskEvents_Struct, &eP);
 	mac->mainTaskEvents = Event_handle(&_mainTaskEvents_Struct);
 
 	Mailbox_Params mP;
@@ -186,9 +192,6 @@ Bool SMac_open(UInt32 freq, Int8 txpwr)
 	Mailbox_Params_init(&mP);
 	Mailbox_construct(&_queue_TxSubmit_Struct, sizeof(SMac_PacketInternal), SMAC_TXSUBMISSION_MAXDEPTH, &mP, &eB);
 	mac->queue_TxSubmit = Mailbox_handle(&_queue_TxSubmit_Struct);
-
-	// binsem_TxEmpty is used temporarily to indicate the RTOS task is ready for events.
-	Semaphore_pend(mac->binsem_TxEmpty, BIOS_NO_WAIT);
 
 	mac->Frequency = freq;
 	mac->TxPower = txpwr;
@@ -199,6 +202,7 @@ Bool SMac_open(UInt32 freq, Int8 txpwr)
 
 	Task_construct(&_mainTask_Struct, (Task_FuncPtr)SMac_MainTaskFxn, &tP, NULL);
 
+	// binsem_TxEmpty is used temporarily to indicate the RTOS task is ready for events.
 	if (!Semaphore_pend(mac->binsem_TxEmpty, 2000000 / Clock_tickPeriod)) {  // Wait up to 2 seconds for main task to respond
 		#ifdef SMAC_DEBUG
 		System_printf("SMac_open: Timeout waiting for RTOS task to signal its successful initialization\n"); System_flush();
@@ -320,6 +324,16 @@ Bool SMac_pendTxQueue(UInt32 waitMs)
 	return Semaphore_pend(mac->binsem_TxEmpty, (waitMs * 1000) / Clock_tickPeriod);
 }
 
+Bool SMac_isRxOverflow()
+{
+	return Semaphore_pend(mac->binsem_RxOvf, BIOS_NO_WAIT);
+}
+
+UInt SMac_getRxQueueFree()
+{
+	return SMac_util_GetRxQueueFreeCount();
+}
+
 UInt32 SMac_getIeeeAddress()
 {
 	// Ripped from EasyLink: IEEE address location burned into ROM
@@ -374,7 +388,7 @@ rfc_CMD_PROP_CS_t RF_cmdPropCarrierSense =
 	.startTrigger.triggerType = TRIG_NOW,
 	.startTrigger.bEnaCmd = 0,   // 0: No CMD_TRIGGER support, 1: Allow a CMD_TRIGGER to start this task
 	.startTrigger.triggerNo = 0, // Which CMD_TRIGGER can trigger this
-	.startTrigger.pastTrig = 0,  // 1: If radio time > trigger time, trigger immediately!
+	.startTrigger.pastTrig = 1,  // 1: If radio time > trigger time, trigger immediately!
 		/* Available condition rules:
 		#define COND_ALWAYS 0         ///< Always run next command (except in case of Abort)
 		#define COND_NEVER 1          ///< Never run next command
@@ -394,8 +408,8 @@ rfc_CMD_PROP_CS_t RF_cmdPropCarrierSense =
 	.csConf.bEnaRssi = 1,     // 1: Enable RSSI as criterion
 	.csConf.bEnaCorr = 0,     // 1: Enable Correlation as criterion (presence of preamble bits)
 	.csConf.operation = 0,    // 0: Busy if "RSSI OR Correlation" indicates Busy, 1: Busy if "RSSI AND Correlation" indicates Busy
-	.csConf.busyOp = 1,       // 0: Continue carrier sense on Channel Busy, 1: End carrier sense if Busy
-	.csConf.idleOp = 0,       // 0: Continue on Channel Idle, 1: End on Channel Idle (1 is preferable for CS-before-TX)
+	.csConf.busyOp = 0,       // 0: Continue carrier sense on Channel Busy, 1: End carrier sense if Busy
+	.csConf.idleOp = 1,       // 0: Continue on Channel Idle, 1: End on Channel Idle (1 is preferable for CS-before-TX)
 	.csConf.timeoutRes = 0,   // 0: Timeout with Channel State Invalid treated as Busy, 1: Timeout treated as Idle
 	.rssiThr = 0,             // RSSI threshold
 	.numRssiIdle = 0,         // # of consecutive RSSI measurements below threshold needed before channel is declared Idle
@@ -419,7 +433,7 @@ rfc_CMD_COUNT_BRANCH_t RF_cmdCountBranch =
 	.startTrigger.triggerType = TRIG_NOW, // Triggers immediately
 	.startTrigger.bEnaCmd     = 0x0,
 	.startTrigger.triggerNo   = 0x0,
-	.startTrigger.pastTrig    = 0x0,
+	.startTrigger.pastTrig    = 0x1,
 	.condition.rule           = COND_STOP_ON_FALSE, // Run next command if this command returned TRUE, stop if it returned FALSE
 													// End causes for the CMD_COUNT_BRANCH command:
 													// Finished operation with counter = 0 when being started: DONE_OK         TRUE
@@ -439,10 +453,10 @@ rfc_CMD_NOP_t RF_cmdNop =
     .status                   = 0x0000,
     .pNextOp                  = 0, // Set this to (uint8_t*)&RF_cmdPropCs in the application
     .startTime                = 0x00000000,
-    .startTrigger.triggerType = TRIG_NOW, // Trigs immediately
+    .startTrigger.triggerType = TRIG_ABSTIME, // Trigs immediately
     .startTrigger.bEnaCmd     = 0x0,
     .startTrigger.triggerNo   = 0x0,
-    .startTrigger.pastTrig    = 0x0,
+    .startTrigger.pastTrig    = 0x1,
     .condition.rule           = COND_ALWAYS, // Always run next command (except in case of Abort)
     .condition.nSkip          = 0x0,
 };
@@ -451,6 +465,7 @@ rfc_CMD_NOP_t RF_cmdNop =
 /**
  * @brief Main task for SMac engine
  */
+volatile RF_EventMask lastTxEvent;
 static Void SMac_MainTaskFxn(UArg arg0, UArg arg1)
 {
 	Semaphore_post(mac->binsem_TxEmpty);
@@ -502,9 +517,17 @@ static Void SMac_MainTaskFxn(UArg arg0, UArg arg1)
 	RF_cmdCountBranch.pNextOpIfOk = (rfc_radioOp_t *)&RF_cmdPropCarrierSense;
 
 	RF_cmdPropCarrierSense.rssiThr = -70;  // Signals above -70dBm indicate busy channel
+	RF_cmdPropCarrierSense.numRssiIdle = 5;
+	RF_cmdPropCarrierSense.numRssiBusy = 5;
 	RF_cmdPropCarrierSense.csEndTime = (2000 + 150) * 4;  // ~2ms wait before TX
-	RF_cmdNop.startTrigger.triggerType = TRIG_ABSTIME;
-	// TODO: Configure settings for RF_cmdPropTx
+	// Configure settings for RF_cmdPropTx
+	RF_cmdPropTx.pPkt = _txBuffer;
+	RF_cmdPropTx.startTrigger.triggerType = TRIG_ABSTIME;
+	RF_cmdPropTx.startTrigger.pastTrig = 1;
+	RF_cmdPropTx.pktConf.bFsOff = 0;
+	RF_cmdPropTx.pktConf.bUseCrc = 1;
+	RF_cmdPropTx.pktConf.bVarLen = 1;
+	RF_cmdPropTx.pNextOp = 0;
 
 	#ifdef SMAC_DEBUG
 	System_printf("SMac_MainTaskFxn: Pointer to state struct: %p\n", mac);
@@ -512,11 +535,9 @@ static Void SMac_MainTaskFxn(UArg arg0, UArg arg1)
 	#endif
 
 	// Set up config for RX
-	if ( RFQueue_defineQueue(&mac->rxQueue, mac->RxQueueBuffer, RXQUEUEBUFSIZE, SMAC_RXQUEUE_MAXDEPTH, SMAC_FRAMESIZE_ALLOCATION) ) {
-		// error!
-		return;
-	}
-	RF_cmdPropRx.startTrigger.triggerType = TRIG_NOW;
+	SMac_util_ConfigureRxQueues();
+	RF_cmdPropRx.startTrigger.triggerType = TRIG_ABSTIME;
+	RF_cmdPropRx.startTrigger.pastTrig = 1;
 	RF_cmdPropRx.pktConf.bRepeatNok = 1;  // Keep listening after CRC error or after successful read
 	RF_cmdPropRx.pktConf.bRepeatOk = 1;
 	RF_cmdPropRx.pktConf.bVarLen = 1;  // Variable-size frames
@@ -539,6 +560,9 @@ static Void SMac_MainTaskFxn(UArg arg0, UArg arg1)
 	Semaphore_post(mac->binsem_TxEmpty);
 
 	while (1) {
+		#ifdef SMAC_DEBUG
+		System_printf("Polling events:\n"); System_flush();
+		#endif
 		UInt events = Event_pend(mac->mainTaskEvents, 0, SMAC_EVT_ALL, BIOS_WAIT_FOREVER);
 		// Process one by one
 		if (events & (UInt)SMAC_EVT_END) {
@@ -568,6 +592,99 @@ static Void SMac_MainTaskFxn(UArg arg0, UArg arg1)
 			}
 		}
 
+		// Handle SMAC_EVT_RX before SMAC_EVT_UPDATERX in order to gracefully drain a full RX queue in the event of RX Queue Overflow
+		if (events & (UInt)SMAC_EVT_RX) {
+			// Process RX Queue entry byte-by-byte, executing program ID callbacks as discovered
+			/* Frame format:
+			 * [FrameLen 1B][DestAddr 4B][SrcAddr 4B][Program entry: [ProgramID 2B][PayloadLen 1B][Payload...]]{[ProgramID 2B][PayloadLen1B][Payload...]}..etc...
+			 */
+			rfc_dataEntryGeneral_t* currentDataEntry = RFQueue_getDataEntry();
+			#ifdef SMAC_DEBUG
+			UInt totalFrames = 0;
+			#endif
+
+			while (currentDataEntry->status == DATA_ENTRY_FINISHED) {
+				#ifdef SMAC_DEBUG
+				totalFrames++;
+				#endif
+				UInt32 dstAddr, srcAddr;
+				UInt16 prID;
+				Int16 fLen;
+				UInt8 pLen, *frm = &currentDataEntry->data;
+				if (currentDataEntry->config.lenSz == 1) {
+					fLen = (Int16)frm[0];
+					frm++;
+				} else if (currentDataEntry->config.lenSz == 2) {
+					fLen = (Int16)frm[0] | ((Int16)frm[1] << 8);
+					frm += 2;
+				} else {
+					#ifdef SMAC_DEBUG
+					System_printf("SMac_MainTaskFxn: SMAC_EVT_RX: Odd error: currentDataEntry->config.lenSz is %d\n", currentDataEntry->config.lenSz); System_flush();
+					#endif
+					RFQueue_nextEntry();  // Skip current entry and set pointer to next item
+					currentDataEntry = RFQueue_getDataEntry();
+					continue;  // Invalid or corrupted RX buffer entry?
+				}
+				fLen--;  // There is an RSSI byte at the very end
+				if (fLen < 11) {
+					#ifdef SMAC_DEBUG
+					System_printf("SMac_MainTaskFxn: SMAC_EVT_RX: Packet received with fLen < 11 (fLen=%d)\n", fLen); System_flush();
+					#endif
+					RFQueue_nextEntry();  // Skip current entry and set pointer to next item
+					currentDataEntry = RFQueue_getDataEntry();
+					continue;  // Invalid frame
+				}
+				dstAddr = (UInt32)frm[0] | ((Uint32)frm[1] << 8) | ((Uint32)frm[2] << 16) | ((UInt32)frm[3] << 24);
+				// Verify dstAddr is valid for this unit, since other transceivers with the same LSB in their IEEE address might trigger the address match.
+				if (!SMac_util_ValidateOurAddress(dstAddr)) {
+					#ifdef SMAC_DEBUG
+					System_printf("SMac_MainTaskFxn: SMAC_EVT_RX: Packet received not destined to us (destAddr=%x)\n", dstAddr); System_flush();
+					#endif
+					RFQueue_nextEntry();  // Skip current entry and set pointer to next item
+					currentDataEntry = RFQueue_getDataEntry();
+					continue;  // Not destined for us; ignore
+				}
+				srcAddr = (UInt32)frm[4] | ((Uint32)frm[5] << 8) | ((Uint32)frm[6] << 16) | ((UInt32)frm[7] << 24);
+				frm += 8;
+				fLen -= 8;
+
+				while (fLen > 2) {
+					prID = (UInt16)frm[0] | ((UInt16)frm[1] << 8);
+					pLen = frm[2];
+					if (fLen < (3 + pLen)) {
+						// Invalid; end of frame, bail out
+						#ifdef SMAC_DEBUG
+						System_printf("SMac_MainTaskFxn: SMAC_EVT_RX: Frame at idx=%d claims pLen=%d, only %d bytes left in frame\n", (UInt)(frm-&currentDataEntry->data), pLen, fLen); System_flush();
+						#endif
+						fLen = 0;
+						continue;
+					}
+					frm += 3;
+					SMac_RxCallback rxCb = SMac_util_getCallbackByProgramID(prID);
+					if (rxCb != NULL) {
+						#ifdef SMAC_DEBUG
+						System_printf("SMac_MainTaskFxn: SMAC_EVT_RX: exec rxCb srcAddr=%x, prID=%x, pLen=%d\n", srcAddr, prID, pLen); System_flush();
+						#endif
+						rxCb(srcAddr, prID, pLen, frm);
+					}
+					if (mac->allProgramCallback != NULL) {
+						#ifdef SMAC_DEBUG
+						System_printf("SMac_MainTaskFxn: SMAC_EVT_RX: exec allProgramCallback srcAddr=%x, prID=%x, pLen=%d\n", srcAddr, prID, pLen); System_flush();
+						#endif
+						mac->allProgramCallback(srcAddr, prID, pLen, frm);
+					}
+					frm += pLen;
+					fLen -= 3 + pLen;
+				}
+				// Finished processing packet
+				RFQueue_nextEntry();  // Release current queue entry and set pointer to next item
+				currentDataEntry = RFQueue_getDataEntry();
+				#ifdef SMAC_DEBUG
+				System_printf("SMac_MainTaskFxn: SMAC_EVT_RX: processed %d frames\n", totalFrames); System_flush();
+				#endif
+			}
+		}
+
 		if (events & (UInt)SMAC_EVT_UPDATERX) {
 			if (Semaphore_pend(mac->binsem_rxSchedUpdate, 50000 / Clock_tickPeriod)) {  // Never wait more than 50ms for this...
 				SMac_RxSchedule s = mac->rxSched;
@@ -593,7 +710,8 @@ static Void SMac_MainTaskFxn(UArg arg0, UArg arg1)
 						// Configure RF_cmdPropRx with timeout
 						SMac_util_PrepareRxCmd(rxms);
 						mac->rfEnable = true;
-						mac->rxCmdHandle = RF_postCmd(mac->rfHandle, (RF_Op*)&RF_cmdPropRx, RF_PriorityNormal, SMac_RxCallbackFxn, IRQ_RX_ENTRY_DONE|IRQ_RX_ABORTED);
+						RF_cmdPropRx.startTime = RF_getCurrentTime();
+						mac->rxCmdHandle = RF_postCmd(mac->rfHandle, (RF_Op*)&RF_cmdPropRx, RF_PriorityNormal, SMac_RxCallbackFxn, IRQ_RX_ENTRY_DONE | IRQ_COMMAND_DONE | IRQ_LAST_COMMAND_DONE);
 						#ifdef SMAC_DEBUG
 						System_printf("SMac_MainTaskFxn: Activate RX\n"); System_flush();
 						#endif
@@ -628,95 +746,6 @@ static Void SMac_MainTaskFxn(UArg arg0, UArg arg1)
 				System_printf("SMac_MainTaskFxn: SMAC_EVT_RXTIMEDOUT: Timeout pending binsem_rxSchedUpdate\n"); System_flush();
 				#endif
 			}
-		}
-
-		if (events & (UInt)SMAC_EVT_RX) {
-			// Process RX Queue entry byte-by-byte, executing program ID callbacks as discovered
-			/* Frame format:
-			 * [FrameLen 1B][DestAddr 4B][SrcAddr 4B][Program entry: [ProgramID 2B][PayloadLen 1B][Payload...]]{[ProgramID 2B][PayloadLen1B][Payload...]}..etc...
-			 */
-			rfc_dataEntryGeneral_t* currentDataEntry;
-			#ifdef SMAC_DEBUG
-			UInt totalFrames = 0;
-			#endif
-			do {
-				currentDataEntry = RFQueue_getDataEntry();
-				#ifdef SMAC_DEBUG
-				totalFrames++;
-				#endif
-				if (currentDataEntry->status == DATA_ENTRY_FINISHED) {
-					UInt32 dstAddr, srcAddr;
-					UInt16 prID;
-					Int16 fLen;
-					UInt8 pLen, *frm = &currentDataEntry->data;
-					if (currentDataEntry->config.lenSz == 1) {
-						fLen = (Int16)frm[0];
-						frm++;
-					} else if (currentDataEntry->config.lenSz == 2) {
-						fLen = (Int16)frm[0] | ((Int16)frm[1] << 8);
-						frm += 2;
-					} else {
-						#ifdef SMAC_DEBUG
-						System_printf("SMac_MainTaskFxn: SMAC_EVT_RX: Odd error: currentDataEntry->config.lenSz is %d\n", currentDataEntry->config.lenSz); System_flush();
-						#endif
-						RFQueue_nextEntry();  // Skip current entry and set pointer to next item
-						continue;  // Invalid?
-					}
-					if (fLen < 11) {
-						#ifdef SMAC_DEBUG
-						System_printf("SMac_MainTaskFxn: SMAC_EVT_RX: Packet received with fLen < 11 (fLen=%d)\n", fLen); System_flush();
-						#endif
-						RFQueue_nextEntry();  // Skip current entry and set pointer to next item
-						continue;  // Invalid frame
-					}
-					dstAddr = (UInt32)frm[0] | ((Uint32)frm[1] << 8) | ((Uint32)frm[2] << 16) | ((UInt32)frm[3] << 24);
-					// Verify dstAddr is valid for this unit, since other transceivers with the same LSB in their IEEE address might trigger the address match.
-					if (!SMac_util_ValidateOurAddress(dstAddr)) {
-						#ifdef SMAC_DEBUG
-						System_printf("SMac_MainTaskFxn: SMAC_EVT_RX: Packet received not destined to us (destAddr=%x)\n", dstAddr); System_flush();
-						#endif
-						RFQueue_nextEntry();  // Skip current entry and set pointer to next item
-						continue;  // Not destined for us; ignore
-					}
-					srcAddr = (UInt32)frm[4] | ((Uint32)frm[5] << 8) | ((Uint32)frm[6] << 16) | ((UInt32)frm[7] << 24);
-					frm += 8;
-					fLen -= 8;
-
-					while (fLen > 2) {
-						prID = (UInt16)frm[0] | ((UInt16)frm[1] << 8);
-						pLen = frm[2];
-						if (fLen < (3 + pLen)) {
-							// Invalid; end of frame, bail out
-							#ifdef SMAC_DEBUG
-							System_printf("SMac_MainTaskFxn: SMAC_EVT_RX: Frame at idx=%d claims pLen=%d, only %d bytes left in frame\n", (UInt)(frm-&currentDataEntry->data), pLen, fLen); System_flush();
-							#endif
-							fLen = 0;
-							continue;
-						}
-						frm += 3;
-						SMac_RxCallback rxCb = SMac_util_getCallbackByProgramID(prID);
-						if (rxCb != NULL) {
-							#ifdef SMAC_DEBUG
-							System_printf("SMac_MainTaskFxn: SMAC_EVT_RX: exec rxCb srcAddr=%x, prID=%x, pLen=%d\n", srcAddr, prID, pLen); System_flush();
-							#endif
-							rxCb(srcAddr, prID, pLen, frm);
-						}
-						if (mac->allProgramCallback != NULL) {
-							#ifdef SMAC_DEBUG
-							System_printf("SMac_MainTaskFxn: SMAC_EVT_RX: exec allProgramCallback srcAddr=%x, prID=%x, pLen=%d\n", srcAddr, prID, pLen); System_flush();
-							#endif
-							mac->allProgramCallback(srcAddr, prID, pLen, frm);
-						}
-						frm += pLen;
-						fLen -= 3 + pLen;
-					}
-					// Finished processing packet
-					RFQueue_nextEntry();  // Release current queue entry and set pointer to next item
-					#ifdef SMAC_DEBUG
-					System_printf("SMac_MainTaskFxn: SMAC_EVT_RX: processed %d frames\n", totalFrames); System_flush();
-					#endif
-				}
-			} while (currentDataEntry->status == DATA_ENTRY_FINISHED);
 		}
 
 		if (events & (UInt)SMAC_EVT_TXSUBMITTED) {
@@ -786,12 +815,22 @@ static Void SMac_MainTaskFxn(UArg arg0, UArg arg1)
 					mac->rfEnable = true;
 					// Configure RF_cmdCsThenTx with payload, length, reload Carrier Sense
 					RF_cmdPropTx.pktLen = frIdx;
-					RF_cmdPropTx.pPkt = _txBuffer;
 					RF_cmdPropCarrierSense.status = 0;
 					RF_cmdCountBranch.counter = mac->txCsWait;
-					RF_EventMask e = RF_runCmd(mac->rfHandle, (RF_Op*)&RF_cmdNop, RF_PriorityNormal, NULL, 0);
+					RF_cmdNop.startTime = RF_getCurrentTime();
+					RF_cmdCountBranch.startTime = RF_cmdNop.startTime;
+					RF_cmdPropTx.startTime = RF_cmdNop.startTime;
 					#ifdef SMAC_DEBUG
-					System_printf("SMac_MainTaskFxn: SMAC_EVT_TXREQUESTED: Carrier Sense return status: %d, CountBranch=%d\n", RF_cmdPropCarrierSense.status, RF_cmdCountBranch.counter); System_flush();
+					RF_cmdPropTx.status = 0xFEFE;
+					#endif
+					lastTxEvent = 0xFFFF;
+					RF_EventMask e = RF_runCmd(mac->rfHandle, (RF_Op*)&RF_cmdNop, RF_PriorityNormal, NULL, 0);
+					lastTxEvent = e;
+					#ifdef SMAC_DEBUG
+					System_printf("SMac_MainTaskFxn: SMAC_EVT_TXREQUESTED: Carrier Sense return status: %04x, CountBranch=%d, CountBranch status=%04x, Nop status=%04x\n", RF_cmdPropCarrierSense.status, RF_cmdCountBranch.counter, RF_cmdCountBranch.status, RF_cmdNop.status); System_flush();
+					if (RF_cmdPropTx.status == 0xFEFE) {
+						System_printf("SMac_MainTaskFxn: RF_cmdPropTx never ran!\n"); System_flush();
+					}
 					#endif
 
 					// TODO: Somehow failed transfers should be signalled?  Also what to do if RF_cmdPropCarrierSense.status == PROP_DONE_BUSY?
@@ -821,7 +860,8 @@ static Void SMac_MainTaskFxn(UArg arg0, UArg arg1)
 							#endif
 							SMac_util_PrepareRxCmd(ms);
 							mac->rfEnable = true;
-							mac->rxCmdHandle = RF_postCmd(mac->rfHandle, (RF_Op*)&RF_cmdPropRx, RF_PriorityNormal, SMac_RxCallbackFxn, IRQ_RX_ENTRY_DONE|IRQ_RX_ABORTED);
+							RF_cmdPropRx.startTime = RF_getCurrentTime();
+							mac->rxCmdHandle = RF_postCmd(mac->rfHandle, (RF_Op*)&RF_cmdPropRx, RF_PriorityNormal, SMac_RxCallbackFxn, IRQ_RX_ENTRY_DONE | IRQ_COMMAND_DONE | IRQ_LAST_COMMAND_DONE);
 						} else {
 							Semaphore_post(mac->binsem_rxSchedUpdate);
 							// No RX after TX, so, shut down the radio.
@@ -853,13 +893,31 @@ static Void SMac_MainTaskFxn(UArg arg0, UArg arg1)
 static Void SMac_RxCallbackFxn(RF_Handle h, RF_CmdHandle c, RF_EventMask e)
 {
 	#ifdef SMAC_DEBUG
-	System_printf("SMac_RxCallbackFxn: EventMask = %d\n", e); System_flush();
+	UInt32 e1 = (e >> 32), e2 = (UInt32)e;
+	System_printf("SMac_RxCallbackFxn: EventMask = %08x%08x, RF_cmdPropRx status = %x\n", e1, e2, RF_cmdPropRx.status); System_flush();
 	#endif
-	if (e & RF_EventRxEntryDone) {
+	if (e & (RF_EventRxEntryDone)) {
+		#ifdef SMAC_DEBUG
+		System_printf("SMac_RxCallbackFxn: Issuing SMAC_EVT_RX\n"); System_flush();
+		#endif
 		Event_post(mac->mainTaskEvents, SMAC_EVT_RX);
 	}
-	if (e & RF_EventRxAborted) {
-		Event_post(mac->mainTaskEvents, SMAC_EVT_RXTIMEDOUT);
+	if (e & (RF_EventCmdDone | RF_EventLastCmdDone)) {
+		if (RF_cmdPropRx.status == PROP_ERROR_RXBUF) {
+			// RX buffer overflow; signal RX (to drain the RX queue buffer) and RXUPDATE
+			#ifdef SMAC_DEBUG
+			System_printf("SMac_RxCallbackFxn: Detected RXBUFOVF, issuing SMAC_EVT_RX | SMAC_EVT_UPDATERX\n"); System_flush();
+			#endif
+			mac->rfEnable = false;
+			mac->rxCmdHandle = NULL;
+			Event_post(mac->mainTaskEvents, SMAC_EVT_RX | SMAC_EVT_UPDATERX);
+			Semaphore_post(mac->binsem_RxOvf);
+		} else {
+			#ifdef SMAC_DEBUG
+			System_printf("SMac_RxCallbackFxn: Issuing SMAC_EVT_RXTIMEDOUT\n"); System_flush();
+			#endif
+			Event_post(mac->mainTaskEvents, SMAC_EVT_RXTIMEDOUT);
+		}
 	}
 }
 
@@ -997,4 +1055,47 @@ static Void SMac_util_PrepareRxCmd(UInt32 timeoutMillis)
 		RF_cmdPropRx.endTrigger.triggerType = TRIG_NEVER;
 		RF_cmdPropRx.endTime = 0;
 	}
+}
+
+static Void SMac_util_ConfigureRxQueues()
+{
+	Int i;
+
+	if (mac->RxQueueBuffer == NULL) {
+		// SMac_init() probably wasn't run!
+		#ifdef SMAC_DEBUG
+		System_printf("SMac_MainTaskFxn: mac->RxQueueBuffer is NULL, most likely SMac_init() wasn't run before SMac_open?\n"); System_flush();
+		#endif
+		return;
+	}
+	if ( RFQueue_defineQueue(&mac->rxQueue, mac->RxQueueBuffer, RXQUEUEBUFSIZE, SMAC_RXQUEUE_MAXDEPTH, SMAC_FRAMESIZE_ALLOCATION) ) {
+		// error!
+		#ifdef SMAC_DEBUG
+		System_printf("SMac_MainTaskFxn: RFQueue_defineQueue failed!\n"); System_flush();
+		#endif
+		return;
+	}
+
+	rfc_dataEntryGeneral_t *cp = (rfc_dataEntryGeneral_t *)mac->rxQueue.pCurrEntry;
+	for (i=0; i < SMAC_RXQUEUE_MAXDEPTH; i++) {
+		cp->config.lenSz = 1;  // Support providing a 1-byte frame length indicator
+		cp = (rfc_dataEntryGeneral_t *)cp->pNextEntry;
+	}
+}
+
+static inline UInt SMac_util_GetRxQueueFreeCount()
+{
+	rfc_dataEntryGeneral_t *cp = (rfc_dataEntryGeneral_t *)mac->rxQueue.pCurrEntry;
+	Int i;
+	UInt count = 0;
+
+	for (i=0; i < SMAC_RXQUEUE_MAXDEPTH; i++) {
+		if (cp->status == DATA_ENTRY_PENDING) {
+			count++;
+			cp = (rfc_dataEntryGeneral_t *)cp->pNextEntry;
+		} else {
+			return count;
+		}
+	}
+	return count;
 }

@@ -14,11 +14,12 @@
 #include <ti/sysbios/knl/Event.h>
 #include <ti/sysbios/knl/Mailbox.h>
 #include <ti/drivers/rf/RF.h>
+#include <driverlib/rf_prop_mailbox.h>
 #include <smartrf_settings/smartrf_settings.h>
 #include "RFQueue.h"
 
 // Defining this symbol enables a whole slew of System_printf's in the stack code, some of which may affect performance.
-#define SMAC_DEBUG 1
+//#define SMAC_DEBUG 1
 
 /**
  * @brief SMac config definitions - many can be overridden in project predefined symbol properties
@@ -44,7 +45,7 @@
 #endif
 
 #ifndef SMAC_MAINTASK_STACKSIZE
-#define SMAC_MAINTASK_STACKSIZE 2048
+#define SMAC_MAINTASK_STACKSIZE 1024
 #endif
 
 #define SMAC_FRAMESIZE_ALLOCATION (SMAC_MAXIMUM_FRAMESIZE+2) //! @brief Needs to be >= SMAC_MAXIMUM_FRAMESIZE, includes pktlen and RSSI
@@ -101,12 +102,13 @@ typedef struct {
 	UInt32 Frequency;
 	Int8 TxPower;
 	Semaphore_Handle binsem_TxEmpty;
+	Semaphore_Handle binsem_RxOvf;
 	Event_Handle mainTaskEvents;
 	Bool rfEnable;  //! @brief This will switch on & off particularly with TX-only nodes, and denotes whether RF_close/RF_open needs to run.
 	Mailbox_Handle queue_TxSubmit;
 	SMac_PacketInternal txQueue[SMAC_TXQUEUE_MAXDEPTH];
 	dataQueue_t rxQueue;
-	uint8_t *RxQueueBuffer;  //! @brief Must be assigned to a 32-bit aligned buffer
+	UInt8 * RxQueueBuffer;  //! @brief Must be assigned to a 32-bit aligned buffer
 	Semaphore_Handle binsem_rxSchedUpdate;  // Semaphore locking access to rxSched, rxSched_postTxMillis
 	volatile SMac_RxSchedule rxSched;
 	volatile UInt32 rxSched_Millis;  // How long to activate RX mode for
@@ -140,6 +142,8 @@ Bool SMac_disableRx(Void);   //! @brief End RX mode immediately.  It can short-e
 Bool SMac_submitTx(Semaphore_Handle, UInt32, UInt16, UInt8, Void *); //! @brief Submit a new packet for eventual transmission
 Void SMac_requestTx();  //! @brief Signal SMac stack to begin transmitting all contents of TxQueue
 Bool SMac_pendTxQueue(UInt32);  //! @brief Allow a task to pend up to <arg> timeout until TX queues are empty
+Bool SMac_isRxOverflow();  //! @brief Check a semaphore indicating if RX overflow has occurred recently.  Semaphore is cleared when this runs.
+UInt SMac_getRxQueueFree();  //! @brief Check how full the RX queue is at this moment.
 
 UInt32 SMac_getIeeeAddress();  //! @brief Obtain the IEEE 802.15.4 address used to derive our SrcAddr
 Void SMac_setAdditionalRxAddress(UInt32 addr);  //! @brief Set a secondary RX address, or unset it if 0
