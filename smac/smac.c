@@ -298,7 +298,7 @@ Bool SMac_submitTx(Semaphore_Handle binsem_Notifier, UInt32 dstAddr, UInt16 prID
 	System_printf("SMac_submitTx: destAddr=%x, prID=%x, len=%d\n", dstAddr, prID, len); System_flush();
 	#endif
 
-	Bool ret = Mailbox_post(mac->queue_TxSubmit, &req, BIOS_WAIT_FOREVER);
+	Bool ret = Mailbox_post(mac->queue_TxSubmit, &req, BIOS_NO_WAIT);  // BIOS_NO_WAIT in case we run this inside an RX callback and hang
 	if (ret) {
 		/* I originally handled this Event_post by setting readerEvent, readerEventId in the queue_TxSubmit mailbox so it
 		 * would automatically post the event when the mailbox was posted.  However, this won't work on CC13xx devices using ROM
@@ -310,6 +310,12 @@ Bool SMac_submitTx(Semaphore_Handle binsem_Notifier, UInt32 dstAddr, UInt16 prID
 		 * So we have to post this event manually...
 		 */
 		Event_post(mac->mainTaskEvents, SMAC_EVT_TXSUBMITTED);
+	} else {
+		// TX mailbox full?  Can't send, but tell client not to wait for it any longer.
+		// TODO: Perhaps the notifier should be changed to an Event, so failure can be signalled to the client.
+		if (binsem_Notifier != NULL) {
+			Semaphore_post(binsem_Notifier);
+		}
 	}
 	return ret;
 }
@@ -519,7 +525,7 @@ static Void SMac_MainTaskFxn(UArg arg0, UArg arg1)
 	RF_cmdPropCarrierSense.rssiThr = -70;  // Signals above -70dBm indicate busy channel
 	RF_cmdPropCarrierSense.numRssiIdle = 5;
 	RF_cmdPropCarrierSense.numRssiBusy = 5;
-	RF_cmdPropCarrierSense.csEndTime = (2000 + 150) * 4;  // ~2ms wait before TX
+	RF_cmdPropCarrierSense.csEndTime = (2000 + 150) * 4;  // ~2ms wait for each BUSY, multiplied by CountBranch
 	// Configure settings for RF_cmdPropTx
 	RF_cmdPropTx.pPkt = _txBuffer;
 	RF_cmdPropTx.startTrigger.triggerType = TRIG_ABSTIME;
@@ -625,6 +631,7 @@ static Void SMac_MainTaskFxn(UArg arg0, UArg arg1)
 					currentDataEntry = RFQueue_getDataEntry();
 					continue;  // Invalid or corrupted RX buffer entry?
 				}
+
 				fLen--;  // There is an RSSI byte at the very end
 				if (fLen < 11) {
 					#ifdef SMAC_DEBUG
@@ -691,29 +698,29 @@ static Void SMac_MainTaskFxn(UArg arg0, UArg arg1)
 				UInt32 rxms = mac->rxSched_Millis;
 				Semaphore_post(mac->binsem_rxSchedUpdate);
 
-				if (mac->rfEnable) {
-					if (mac->rxCmdHandle) {
-						if (s == SMAC_RXTYPE_DISABLED || s == SMAC_RXTYPE_AFTERTX) {
-							// Disable RX
-							RF_flushCmd(mac->rfHandle, mac->rxCmdHandle, 1);
-							mac->rfEnable = false;
-							mac->rxCmdHandle = NULL;
-							//RF_yield(mac->rfHandle);
-							#ifdef SMAC_DEBUG
-							System_printf("SMac_MainTaskFxn: Disable RX, radio off\n"); System_flush();
-							#endif
-						}
+				if (s == SMAC_RXTYPE_CONTINUAL) {
+					// Activate RX mode
+					if (mac->rfEnable && mac->rxCmdHandle) {
+						RF_flushCmd(mac->rfHandle, mac->rxCmdHandle, 1);  // This means we're performing a refresh of the RX params
 					}
-				} else {
-					if (s == SMAC_RXTYPE_CONTINUAL) {
-						// Activate RX mode
-						// Configure RF_cmdPropRx with timeout
-						SMac_util_PrepareRxCmd(rxms);
-						mac->rfEnable = true;
-						RF_cmdPropRx.startTime = RF_getCurrentTime();
-						mac->rxCmdHandle = RF_postCmd(mac->rfHandle, (RF_Op*)&RF_cmdPropRx, RF_PriorityNormal, SMac_RxCallbackFxn, IRQ_RX_ENTRY_DONE | IRQ_COMMAND_DONE | IRQ_LAST_COMMAND_DONE);
+					// Configure RF_cmdPropRx with timeout
+					SMac_util_PrepareRxCmd(rxms);
+					mac->rfEnable = true;
+					RF_cmdPropRx.startTime = RF_getCurrentTime();
+					mac->rxCmdHandle = RF_postCmd(mac->rfHandle, (RF_Op*)&RF_cmdPropRx, RF_PriorityNormal, SMac_RxCallbackFxn, IRQ_RX_ENTRY_DONE | IRQ_COMMAND_DONE | IRQ_LAST_COMMAND_DONE);
+					#ifdef SMAC_DEBUG
+					System_printf("SMac_MainTaskFxn: Activate RX\n"); System_flush();
+					#endif
+				}
+				if (s == SMAC_RXTYPE_DISABLED || s == SMAC_RXTYPE_AFTERTX) {
+					if (mac->rfEnable && mac->rxCmdHandle) {
+						// Disable RX
+						RF_flushCmd(mac->rfHandle, mac->rxCmdHandle, 1);
+						mac->rfEnable = false;
+						mac->rxCmdHandle = NULL;
+						//RF_yield(mac->rfHandle);
 						#ifdef SMAC_DEBUG
-						System_printf("SMac_MainTaskFxn: Activate RX\n"); System_flush();
+						System_printf("SMac_MainTaskFxn: Disable RX, radio off\n"); System_flush();
 						#endif
 					}
 				}
@@ -729,18 +736,22 @@ static Void SMac_MainTaskFxn(UArg arg0, UArg arg1)
 				SMac_RxSchedule s = mac->rxSched;
 				UInt32 rxms = mac->rxSched_Millis;
 
-				if (s == SMAC_RXTYPE_CONTINUAL) {
+				if (s == SMAC_RXTYPE_CONTINUAL && rxms != 0) {
 					mac->rxSched = SMAC_RXTYPE_DISABLED;
 					mac->rxSched_Millis = 0;
+					s = SMAC_RXTYPE_DISABLED;
+					rxms = 0;
 				}
 				Semaphore_post(mac->binsem_rxSchedUpdate);
-				// Use RF_yield to inform RF driver to shut off radio
-				//RF_yield(mac->rfHandle);
-				mac->rfEnable = false;
-				mac->rxCmdHandle = NULL;
-				#ifdef SMAC_DEBUG
-				System_printf("SMac_MainTaskFxn: RX timeout - radio off\n"); System_flush();
-				#endif
+				if (s != SMAC_RXTYPE_CONTINUAL) {  // A re-start of continual RX may trigger this event.
+					// Use RF_yield to inform RF driver to shut off radio
+					//RF_yield(mac->rfHandle);
+					mac->rfEnable = false;
+					mac->rxCmdHandle = NULL;
+					#ifdef SMAC_DEBUG
+					System_printf("SMac_MainTaskFxn: RX timeout - radio off\n"); System_flush();
+					#endif
+				}
 			} else {
 				#ifdef SMAC_DEBUG
 				System_printf("SMac_MainTaskFxn: SMAC_EVT_RXTIMEDOUT: Timeout pending binsem_rxSchedUpdate\n"); System_flush();
@@ -785,8 +796,8 @@ static Void SMac_MainTaskFxn(UArg arg0, UArg arg1)
 
 				do {
 					frRem = SMac_util_StuffPacket(_txBuffer, frIdx, pkt);
-					frIdx = SMAC_FRAMESIZE_ALLOCATION - frRem;
 					if (frRem != -1) {
+						frIdx = SMAC_MAXIMUM_FRAMESIZE - frRem;
 						// Add binary semaphore notifier to our list
 						txNotifyList[notifyCount++] = pkt->binsem_NotifySent;
 						// Clear pkt from TxQueue
@@ -823,9 +834,7 @@ static Void SMac_MainTaskFxn(UArg arg0, UArg arg1)
 					#ifdef SMAC_DEBUG
 					RF_cmdPropTx.status = 0xFEFE;
 					#endif
-					lastTxEvent = 0xFFFF;
 					RF_EventMask e = RF_runCmd(mac->rfHandle, (RF_Op*)&RF_cmdNop, RF_PriorityNormal, NULL, 0);
-					lastTxEvent = e;
 					#ifdef SMAC_DEBUG
 					System_printf("SMac_MainTaskFxn: SMAC_EVT_TXREQUESTED: Carrier Sense return status: %04x, CountBranch=%d, CountBranch status=%04x, Nop status=%04x\n", RF_cmdPropCarrierSense.status, RF_cmdCountBranch.counter, RF_cmdCountBranch.status, RF_cmdNop.status); System_flush();
 					if (RF_cmdPropTx.status == 0xFEFE) {
@@ -881,10 +890,10 @@ static Void SMac_MainTaskFxn(UArg arg0, UArg arg1)
 					#endif
 					SMac_util_clearTxQueue();
 					Semaphore_post(mac->binsem_TxEmpty);  // TX queue empty, signal anyone waiting for it
-				}
-			}
-		}
-	}
+				} /* if (frIdx > 8) */
+			} /* if (pkt = SMac_util_getFirstTxEntry()) */
+		} /* if (events & (UInt)SMAC_EVT_TXREQUESTED) */
+	} /* while (1) */
 }
 
 /**
@@ -1073,6 +1082,7 @@ static Void SMac_util_ConfigureRxQueues()
 		#ifdef SMAC_DEBUG
 		System_printf("SMac_MainTaskFxn: RFQueue_defineQueue failed!\n"); System_flush();
 		#endif
+		BIOS_exit(1);
 		return;
 	}
 
