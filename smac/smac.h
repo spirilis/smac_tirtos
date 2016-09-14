@@ -49,7 +49,7 @@
 #endif
 
 #define SMAC_FRAMESIZE_ALLOCATION (SMAC_MAXIMUM_FRAMESIZE+2) //! @brief Needs to be >= SMAC_MAXIMUM_FRAMESIZE, includes pktlen and RSSI
-static uint8_t SMac_Basestation[] = { 0xDE, 0xAD, 0xBE, 0xEF };  //! @brief Universal Base Station address
+static UInt32 SMac_Basestation = 0xDEADBEEF;
 typedef void(*SMac_RxCallback)(UInt32 srcAddr, UInt16 programID, UInt8 payloadLen, Void *payload);  // Packet callback function type
 
 /**

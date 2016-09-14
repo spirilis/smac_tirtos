@@ -834,7 +834,7 @@ static Void SMac_MainTaskFxn(UArg arg0, UArg arg1)
 					#ifdef SMAC_DEBUG
 					RF_cmdPropTx.status = 0xFEFE;
 					#endif
-					RF_EventMask e = RF_runCmd(mac->rfHandle, (RF_Op*)&RF_cmdNop, RF_PriorityNormal, NULL, 0);
+					RF_EventMask e = RF_runCmd(mac->rfHandle, (RF_Op*)&RF_cmdNop, RF_PriorityNormal, NULL, 0);  // Exec CarrierSense-then-TX radio transmission
 					#ifdef SMAC_DEBUG
 					System_printf("SMac_MainTaskFxn: SMAC_EVT_TXREQUESTED: Carrier Sense return status: %04x, CountBranch=%d, CountBranch status=%04x, Nop status=%04x\n", RF_cmdPropCarrierSense.status, RF_cmdCountBranch.counter, RF_cmdCountBranch.status, RF_cmdNop.status); System_flush();
 					if (RF_cmdPropTx.status == 0xFEFE) {
