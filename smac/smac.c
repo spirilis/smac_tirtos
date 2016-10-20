@@ -298,6 +298,10 @@ Bool SMac_submitTx(Semaphore_Handle binsem_Notifier, UInt32 dstAddr, UInt16 prID
 	System_printf("SMac_submitTx: destAddr=%x, prID=%x, len=%d\n", dstAddr, prID, len); System_flush();
 	#endif
 
+	if (req.length > 0 && req.data == NULL) {
+		return false;
+	}
+
 	Bool ret = Mailbox_post(mac->queue_TxSubmit, &req, BIOS_NO_WAIT);  // BIOS_NO_WAIT in case we run this inside an RX callback and hang
 	if (ret) {
 		/* I originally handled this Event_post by setting readerEvent, readerEventId in the queue_TxSubmit mailbox so it
