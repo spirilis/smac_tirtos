@@ -15,6 +15,7 @@ Payload:
 -* Thermocouple Temp: 2-bytes, Little-Endian Signed 16-bit Integer corresponding to whole degrees Celsius
 -* Ambient Temp: 2-bytes, Little-Endian Signed 16-bit Integer corresponding to whole degrees Celsius
 -* Error: 1-byte, Bitfield:
+
 | 7 | 6 | 5 | 4 | 3 | 2 | 1 | 0 |
 |---|---|---|---|---|---|---|---|
 |   |   |   |   |   |Short to VCC|Short to GND|Open Circuit|
