@@ -5,7 +5,7 @@ This is a registry of my own personal program IDs and their packet format.  This
 
 ### Device identification
 Many individual microcontroller devices can have multiple instances of a sensor.  To quell ambiguity, a separate 16-bit Unsigned Integer addressing system
-is used to give these sub-devices a unique global ID.  This address is completely arbitrary, but it serves to separate the logical instance of a sensor
+is used to give these sub-devices a unique ID.  This address is completely arbitrary, but it serves to separate the logical instance of a sensor
 with the IEEE address of the microcontroller servicing it at that point in time.
 
 E.g. my garage temp+humidity sensor might be serviced by a particular CC1310 gadget for a couple years, then something bad happens to that board and
