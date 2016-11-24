@@ -6,7 +6,7 @@ This is a registry of my own personal program IDs and their packet format.  This
 ### Thermocouple
 I use thermocouples for measuring anything related to fire; smoker/grill temperature, roast temperature, woodstove flue and exterior stove temps.
 #### Program ID: 0x2001
-Payload:
+Payload (5 bytes):
 
 | 0-1 | 2-3 | 4 |
 |-----|-----|---|
@@ -19,3 +19,23 @@ Payload:
 | 7 | 6 | 5 | 4 | 3 | 2 | 1 | 0 |
 |---|---|---|---|---|---|---|---|
 |   |   |   |   |   |Short to VCC|Short to GND|Open Circuit|
+
+### Temperature + Humidity
+My current application for this involves a TI HDC1080 temp+humidity sensor.
+#### Program ID: 0x2002
+Payload:
+
+| 0-1 | 2 | 3 |
+|-----|---|---|
+| Temperature | Humidity | Status |
+
+* Temperature: 2-bytes, Little-Endian Signed 16-bit Integer corresponding to degrees Celsius with 3 bits of decimal (i.e. signed fixed-point Q12.3)
+* Humidity: 1-byte, Unsigned 8-bit Integer corresponding to percent relative humidity in fixed-point Q0.8 format.  (0=0% RH, 255=100% RH)
+* Status: 1-byte, Bitfield:
+
+| 7 | 6 | 5 | 4 | 3 | 2 | 1 | 0 |
+|---|---|---|---|---|---|---|---|
+|   |   |   |   |   |   |   |Heater On|
+
+ * Heater On: Indicates the HDC1080's built-in heater was used when performing this measurement.
+   This is recommended when relative humidity has been around 100% for an extended period of time.
