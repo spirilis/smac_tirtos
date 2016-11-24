@@ -8,6 +8,8 @@ I use thermocouples for measuring anything related to fire; smoker/grill tempera
 #### Program ID: 0x2001
 Payload (5 bytes):
 
+(Byte index)
+
 | 0-1 | 2-3 | 4 |
 |-----|-----|---|
 | Thermocouple Temp | Ambient Temp | Error |
@@ -15,6 +17,8 @@ Payload (5 bytes):
 * Thermocouple Temp: 2-bytes, Little-Endian Signed 16-bit Integer corresponding to whole degrees Celsius
 * Ambient Temp: 2-bytes, Little-Endian Signed 16-bit Integer corresponding to whole degrees Celsius
 * Error: 1-byte, Bitfield:
+
+(Bit index)
 
 | 7 | 6 | 5 | 4 | 3 | 2 | 1 | 0 |
 |---|---|---|---|---|---|---|---|
@@ -25,6 +29,8 @@ My current application for this involves a TI HDC1080 temp+humidity sensor.
 #### Program ID: 0x2002
 Payload:
 
+(Byte index)
+
 | 0-1 | 2 | 3 |
 |-----|---|---|
 | Temperature | Humidity | Status |
@@ -32,6 +38,8 @@ Payload:
 * Temperature: 2-bytes, Little-Endian Signed 16-bit Integer corresponding to degrees Celsius with 3 bits of decimal (i.e. signed fixed-point Q12.3)
 * Humidity: 1-byte, Unsigned 8-bit Integer corresponding to percent relative humidity in fixed-point Q0.8 format.  (0=0% RH, 255=100% RH)
 * Status: 1-byte, Bitfield:
+
+(Bit index)
 
 | 7 | 6 | 5 | 4 | 3 | 2 | 1 | 0 |
 |---|---|---|---|---|---|---|---|
