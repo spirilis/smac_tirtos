@@ -51,8 +51,8 @@ static const OutputConfig outputPower[] = {
     { 10, 0x38d3 },
     { 11, 0x50da },
     { 12, 0xb818 },
-    { 13, 0xa73f }, /* 12.5 */
-    { 14, 0xa73f },
+    { 13, 0xa73f }, /* 12.5 with CCFG_FORCE_VDDR_HH=0 */
+    { 14, 0xa73f }, /* 14 with CCFG_FORCE_VDDR_HH=1   */
     {-10, 0x08c0 },
 };
 
@@ -370,6 +370,18 @@ Task_Mode SMac_runState()
 	return Task_getMode(Task_handle(&_mainTask_Struct));
 }
 
+Void SMac_setFrequency(UInt32 cfreq)
+{
+	mac->Frequency = cfreq;
+	Event_post(mac->mainTaskEvents, SMAC_EVT_CFGUPDATED);
+}
+
+Void SMac_setTxPower(Int8 dbm)
+{
+	mac->TxPower = dbm;
+	Event_post(mac->mainTaskEvents, SMAC_EVT_CFGUPDATED);
+}
+
 
 /**
  * @brief RF commands for custom Carrier Sense-then-TX
@@ -516,7 +528,7 @@ static Void SMac_MainTaskFxn(UArg arg0, UArg arg1)
 	#endif
 
 	// Right off the bat, put the RF core to sleep until we have something useful to do.
-	//RF_yield(mac->rfHandle);
+	RF_yield(mac->rfHandle);
 	mac->rfEnable = false;
 	mac->rxCmdHandle = NULL;
 
@@ -722,7 +734,7 @@ static Void SMac_MainTaskFxn(UArg arg0, UArg arg1)
 						RF_flushCmd(mac->rfHandle, mac->rxCmdHandle, 1);
 						mac->rfEnable = false;
 						mac->rxCmdHandle = NULL;
-						//RF_yield(mac->rfHandle);
+						RF_yield(mac->rfHandle);
 						#ifdef SMAC_DEBUG
 						System_printf("SMac_MainTaskFxn: Disable RX, radio off\n"); System_flush();
 						#endif
@@ -731,6 +743,83 @@ static Void SMac_MainTaskFxn(UArg arg0, UArg arg1)
 			} else {
 				#ifdef SMAC_DEBUG
 				System_printf("SMac_MainTaskFxn: SMAC_EVT_UPDATERX: Timeout pending binsem_rxSchedUpdate\n"); System_flush();
+				#endif
+			}
+		}
+
+		if (events & (UInt)SMAC_EVT_CFGUPDATED) {
+			if (Semaphore_pend(mac->binsem_rxSchedUpdate, 50000 / Clock_tickPeriod)) {  // Never wait more than 50ms for this...
+				SMac_RxSchedule s = mac->rxSched;
+				UInt32 rxms = mac->rxSched_Millis;
+				Semaphore_post(mac->binsem_rxSchedUpdate);
+
+				#ifdef SMAC_DEBUG
+				System_printf("SMac_MainTaskFxn: SMAC_EVT_CFGUPDATED requested\n"); System_flush();
+				#endif
+				// Check if CCFG_FORCE_VDDR_HH is set to 1 if the txpwr requested is > 13
+			    #if (CCFG_FORCE_VDDR_HH != 0x1)
+				if (mac->TxPower > 13) {
+					mac->TxPower = 13;
+					continue;  // Invalid TX power parameter; forget about it.
+				}
+			    #endif
+
+				if (mac->rfEnable) {
+					if (mac->rxCmdHandle) {
+						#ifdef SMAC_DEBUG
+						System_printf("SMac_MainTaskFxn: SMAC_EVT_CFGUPDATED: Killing active RX mode in preparation for reconfig\n"); System_flush();
+						#endif
+						RF_flushCmd(mac->rfHandle, mac->rxCmdHandle, 1);
+						mac->rxCmdHandle = NULL;
+						RF_yield(mac->rfHandle);
+					}
+				}
+
+				// Set TX power in CMD_PROP_RADIO_DIV_SETUP
+				if (mac->TxPower < 0) {
+					txPwrIdx = SMAC_TXPOWER_TABLE_SIZE - 1;
+				} else {
+					txPwrIdx = mac->TxPower;
+				}
+				RF_cmdPropRadioDivSetup.txPower = outputPower[txPwrIdx].txPower;
+                #ifdef SMAC_DEBUG
+				System_printf("SMac_MainTaskFxn: SMAC_EVT_CFGUPDATED: Programming TXpower = %d dBm\n", mac->TxPower); System_flush();
+                #endif
+				RF_close(mac->rfHandle);
+				mac->rfHandle = RF_open(&mac->rfObject, &RF_prop, (RF_RadioSetup *)&RF_cmdPropRadioDivSetup, &rfParams);
+				if (mac->rfHandle == NULL) {
+					// Ut oh, we're in trouble!
+                    #ifdef SMAC_DEBUG
+					System_printf("SMac_MainTaskFxn: SMAC_EVT_CFGUPDATED: Rerunning RF_open failed!!!\n"); System_flush();
+                    #endif
+					return;  // Halt SMac system
+				}
+
+				// Configure cmdFs frequency
+				RF_cmdFs.frequency = (UInt16)(mac->Frequency / 1000000);
+				RF_cmdFs.fractFreq = (UInt16)(((UInt64)mac->Frequency - (RF_cmdFs.frequency * 1000000)) * 65536 / 1000000);
+				RF_runCmd(mac->rfHandle, (RF_Op*)&RF_cmdFs, RF_PriorityNormal, NULL, 0);
+				#ifdef SMAC_DEBUG
+				System_printf("SMac_MainTaskFxn: SMAC_EVT_CFGUPDATED: Programming frequency synthesizer; freq=%d, fract=%d\n", RF_cmdFs.frequency, RF_cmdFs.fractFreq); System_flush();
+				#endif
+
+
+				// Re-enable RX if previously active
+				// This will internally re-run CMD_PROP_RADIO_DIV_SETUP and CMD_FS with our new parameters
+				if (s == SMAC_RXTYPE_CONTINUAL) {
+					// Activate RX mode
+					// Configure RF_cmdPropRx with timeout
+					SMac_util_PrepareRxCmd(rxms);
+					mac->rfEnable = true;
+					RF_cmdPropRx.startTime = RF_getCurrentTime();
+					mac->rxCmdHandle = RF_postCmd(mac->rfHandle, (RF_Op*)&RF_cmdPropRx, RF_PriorityNormal, SMac_RxCallbackFxn, IRQ_RX_ENTRY_DONE | IRQ_COMMAND_DONE | IRQ_LAST_COMMAND_DONE);
+					#ifdef SMAC_DEBUG
+					System_printf("SMac_MainTaskFxn: Activate RX after reconfig\n"); System_flush();
+					#endif
+				}
+			} else {
+				#ifdef SMAC_DEBUG
+				System_printf("SMac_MainTaskFxn: SMAC_EVT_CFGUPDATED: Timeout pending binsem_rxSchedUpdate\n"); System_flush();
 				#endif
 			}
 		}
@@ -749,7 +838,7 @@ static Void SMac_MainTaskFxn(UArg arg0, UArg arg1)
 				Semaphore_post(mac->binsem_rxSchedUpdate);
 				if (s != SMAC_RXTYPE_CONTINUAL) {  // A re-start of continual RX may trigger this event.
 					// Use RF_yield to inform RF driver to shut off radio
-					//RF_yield(mac->rfHandle);
+					RF_yield(mac->rfHandle);
 					mac->rfEnable = false;
 					mac->rxCmdHandle = NULL;
 					#ifdef SMAC_DEBUG
@@ -879,7 +968,7 @@ static Void SMac_MainTaskFxn(UArg arg0, UArg arg1)
 							Semaphore_post(mac->binsem_rxSchedUpdate);
 							// No RX after TX, so, shut down the radio.
 							mac->rfEnable = false;
-							//RF_yield(mac->rfHandle);
+							RF_yield(mac->rfHandle);
 							#ifdef SMAC_DEBUG
 							System_printf("SMac_MainTaskFxn: SMAC_EVT_TXREQUESTED: No RX-after-TX, radio off\n"); System_flush();
 							#endif
@@ -902,33 +991,21 @@ static Void SMac_MainTaskFxn(UArg arg0, UArg arg1)
 
 /**
  * @brief Callback function for RF driver used for RX events
+ * Note: This runs from RF driver Swi context, DO NOT USE System_printf !!!
  */
 static Void SMac_RxCallbackFxn(RF_Handle h, RF_CmdHandle c, RF_EventMask e)
 {
-	#ifdef SMAC_DEBUG
-	UInt32 e1 = (e >> 32), e2 = (UInt32)e;
-	System_printf("SMac_RxCallbackFxn: EventMask = %08x%08x, RF_cmdPropRx status = %x\n", e1, e2, RF_cmdPropRx.status); System_flush();
-	#endif
 	if (e & (RF_EventRxEntryDone)) {
-		#ifdef SMAC_DEBUG
-		System_printf("SMac_RxCallbackFxn: Issuing SMAC_EVT_RX\n"); System_flush();
-		#endif
 		Event_post(mac->mainTaskEvents, SMAC_EVT_RX);
 	}
 	if (e & (RF_EventCmdDone | RF_EventLastCmdDone)) {
 		if (RF_cmdPropRx.status == PROP_ERROR_RXBUF) {
 			// RX buffer overflow; signal RX (to drain the RX queue buffer) and RXUPDATE
-			#ifdef SMAC_DEBUG
-			System_printf("SMac_RxCallbackFxn: Detected RXBUFOVF, issuing SMAC_EVT_RX | SMAC_EVT_UPDATERX\n"); System_flush();
-			#endif
 			mac->rfEnable = false;
 			mac->rxCmdHandle = NULL;
 			Event_post(mac->mainTaskEvents, SMAC_EVT_RX | SMAC_EVT_UPDATERX);
 			Semaphore_post(mac->binsem_RxOvf);
 		} else {
-			#ifdef SMAC_DEBUG
-			System_printf("SMac_RxCallbackFxn: Issuing SMAC_EVT_RXTIMEDOUT\n"); System_flush();
-			#endif
 			Event_post(mac->mainTaskEvents, SMAC_EVT_RXTIMEDOUT);
 		}
 	}

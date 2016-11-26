@@ -76,4 +76,4 @@ Payload:
  * Heater On: Indicates the HDC1080's built-in heater was used when performing this measurement.
    This is recommended when relative humidity has been around 100% for an extended period of time in order to
    boil off potential moisture infiltration that introduces persistent error in the humidity reading.  Obviously the
-   heater may skew the results a bit.
+   heater   may skew the results a bit.

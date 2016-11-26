@@ -82,14 +82,12 @@ typedef enum {
 	SMAC_EVT_RXTIMEDOUT = 1 << 3,
 	SMAC_EVT_TXREQUESTED = 1 << 4,
 	SMAC_EVT_SECADDRUPDATED = 1 << 5,
-	SMAC_EVT_FREQUPDATED = 1 << 6,  // TODO
-	SMAC_EVT_TXPWRUPDATED = 1 << 7, // TODO
-	SMAC_EVT_TXWAITUPDATED = 1 << 8, // TODO
+	SMAC_EVT_CFGUPDATED = 1 << 6,
 	SMAC_EVT_END = 1 << 7
 } SMac_MainTaskEvent;
 #define SMAC_EVT_ALL ( (UInt)SMAC_EVT_RX | (UInt)SMAC_EVT_UPDATERX | (UInt)SMAC_EVT_TXSUBMITTED \
 		                  | (UInt)SMAC_EVT_RXTIMEDOUT | (UInt)SMAC_EVT_TXREQUESTED | (UInt)SMAC_EVT_SECADDRUPDATED \
-						  | (UInt)SMAC_EVT_END )
+						  | (UInt)SMAC_EVT_CFGUPDATED | (UInt)SMAC_EVT_END )
 
 typedef struct {
 	UInt16 programID;
@@ -148,6 +146,9 @@ UInt SMac_getRxQueueFree();  //! @brief Check how full the RX queue is at this m
 UInt32 SMac_getIeeeAddress();  //! @brief Obtain the IEEE 802.15.4 address used to derive our SrcAddr
 Void SMac_setAdditionalRxAddress(UInt32 addr);  //! @brief Set a secondary RX address, or unset it if 0
 UInt32 SMac_getAdditionalRxAddress();  //! @brief Return the value of our "secondary" RX address or 0 if it's not set.
+
+Void SMac_setFrequency(UInt32);  //! @brief Change radio center frequency; restarts RX if active
+Void SMac_setTxPower(Int8);      //! @brief Change radio TX power; restarts RX if active
 
 
 /**
