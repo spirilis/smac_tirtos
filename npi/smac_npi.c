@@ -775,7 +775,7 @@ static Void updateLeds()
 		}
 	} else {
 		PIN_setOutputValue(ledPinHandle, Board_RLED, 0);
-		PIN_setOutputValue(ledPinHandle, Board_RLED, 1);
+		PIN_setOutputValue(ledPinHandle, Board_RLED, 0);
 	}
 }
 
