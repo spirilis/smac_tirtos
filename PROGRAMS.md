@@ -77,3 +77,29 @@ Payload:
    This is recommended when relative humidity has been around 100% for an extended period of time in order to
    boil off potential moisture infiltration that introduces persistent error in the humidity reading.  Obviously the
    heater   may skew the results a bit.
+
+### Ping
+Simple echo request, echo reply system especially useful for validating real-world RF link budget.
+#### Echo Request Program ID: 0x2003
+Payload:
+
+(Byte index)
+
+| 0-3 |
+|-----|
+| Sequence # |
+
+* Sequence#: An unsigned 32-bit integer (Little-Endian) echoed back to the sender so lost pings can be tracked.
+
+The Ping system uses the 32-bit IEEE address for its response so Device ID is not relevant here.
+
+#### Echo Reply Program ID: 0x2004
+Payload:
+
+(Byte index)
+
+| 0-3 |
+|-----|
+| Sequence # |
+
+* Sequence#: The 4-byte payload given to this node during an initial echo-request (ProgID 0x2003)
