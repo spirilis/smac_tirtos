@@ -1,0 +1,149 @@
+/* smac_npi.h - SMac Network Processor Interface
+ *
+ * Header information
+ *
+ * Note: When creating a CCS project for the CC1310, CC1350 for the SMac NPI layer, please modify the
+ * TI-RTOS .cfg file with the following - search for these statements and modify their values in-place
+ * (don't just add these statements to the end of the .cfg file):
+ *
+ * 1. Recommend enabling error reporting e.g.:
+ *    Error.policyFxn = Error.policyDefault;
+ *    Error.raiseHook = Error.print;
+ *    System.abortFxn = System.abortStd;
+ *    System.exitFxn = System.exitStd;
+ *
+ * 2. Enable System_printf features:
+ *    var SysMin = xdc.useModule('xdc.runtime.SysMin');
+ *    SysMin.bufSize = 256;
+ *    System.SupportProxy = SysMin;
+ *
+ * 3. Disable ROM usage by commenting out this section:
+ *    var ROM = xdc.useModule('ti.sysbios.rom.ROM');
+ *    if (Program.cpu.deviceName.match(/CC26/)) {
+ *        ROM.romName = ROM.CC2650;
+ *    }
+ *    else if (Program.cpu.deviceName.match(/CC13/)) {
+ *        ROM.romName = ROM.CC1350;
+ *    }
+ *
+ * 4. Use a BIOS heap size of 3KB:
+ *    BIOS.heapSize = 3072;
+ *
+ * 5. Use a Program.stack size of 1.5KB:
+ *    Program.stack = 1536;
+ */
+
+#ifndef SMAC_NPI_H_
+#define SMAC_NPI_H_
+
+
+/* XDCtools Header files */
+#include <xdc/std.h>
+#include <xdc/runtime/System.h>
+#include <xdc/runtime/Error.h>
+
+/* BIOS Header files */
+#include <ti/sysbios/BIOS.h>
+#include <ti/sysbios/knl/Clock.h>
+#include <ti/sysbios/knl/Task.h>
+
+/* TI-RTOS Header files */
+#include <ti/drivers/PIN.h>
+#include <ti/drivers/UART.h>
+#include <ti/drivers/uart/UARTCC26XX.h>
+
+/* Board Header files */
+#include "Board.h"
+
+/* SMac API */
+#include <smac/smac.h>
+
+// Identification string for this NPI controller instance
+#define SMACNPI_IDENTIFIER "RPIBSTN0"
+
+/* NPI Control Frame commands */
+#define SMACNPI_CONTROL_UNSQUELCH_HOST     (0x00)
+#define SMACNPI_CONTROL_SQUELCH_HOST       (0x01)
+// GET_RF returns 8 bytes:
+// #0: UInt8 boolean, RF ON/OFF (0 = off, !0 = on)
+// #1-4: UInt32 Center Frequency, Little-Endian
+// #5: Int8 TX power (dBm)
+// #6-7: UInt16 SMac_requestTx() tick interval in milliseconds (Little-Endian)
+#define SMACNPI_CONTROL_GET_RF             (0x02)
+// SET_CENTERFREQ receives a UInt32 (4-byte) value in Little-Endian
+#define SMACNPI_CONTROL_SET_CENTERFREQ     (0x03)
+// SET_TXPOWER receives an Int8 (1-byte) value in dBm
+#define SMACNPI_CONTROL_SET_TXPOWER        (0x04)
+// SET_RF_ON receives a UInt8 boolean, 0 = off, !0 = on
+#define SMACNPI_CONTROL_SET_RF_ON          (0x05)
+// SET_ALTERNATE_ADDR configures a 2nd address the base station MCU will respond to besides its own IEEE address.
+#define SMACNPI_CONTROL_SET_ALTERNATE_ADDR (0x06)
+// GET_ADDRESSES returns 8 bytes, first 4 being local IEEE addr (UInt32 Little-Endian), last 4 being the Alternate address if present, or 0 if not.
+#define SMACNPI_CONTROL_GET_ADDRESSES      (0x07)
+// RUN_TX forces execution of SMac_requestTx() immediately
+#define SMACNPI_CONTROL_RUN_TX             (0x08)
+// SET_TX_TICK configures the automatic SMac_requestTx() interval; 0 disables it (thus requiring RUN_TX to transmit)
+// Value received by host is UInt16 (little-endian) in milliseconds.
+#define SMACNPI_CONTROL_SET_TX_TICK        (0x09)
+#define SMACNPI_CONTROL_GET_IDENTIFIER     (0x10)
+// SET_LEDS modifies the master LED_MASTER_ENABLE bit for the LED manager functions,
+// then runs updateLeds() to enforce them.  LED status is preserved across disable/enable cycles
+// and will be internally updated by the requisite events (RX on, off, packet TX or RX) regardless of enable status.
+// Takes a 1-byte value, 0 = off, anything else = on
+#define SMACNPI_CONTROL_SET_LEDS           (0x11)
+// TODO: Add an instrumentation request control frame to read statistics
+
+/* NPI Control frame - expected data payload size from host */
+#define SMACNPI_CONTROL_UNSQUELCH_HOST__LEN       (0)
+#define SMACNPI_CONTROL_SQUELCH_HOST__LEN         (0)
+#define SMACNPI_CONTROL_GET_RF__LEN               (0)
+#define SMACNPI_CONTROL_SET_CENTERFREQ__LEN       (4)
+#define SMACNPI_CONTROL_SET_TXPOWER__LEN          (1)
+#define SMACNPI_CONTROL_SET_RF_ON__LEN            (1)
+#define SMACNPI_CONTROL_SET_ALTERNATE_ADDR__LEN   (4)
+#define SMACNPI_CONTROL_GET_ADDRESSES__LEN        (8)
+#define SMACNPI_CONTROL_RUN_TX__LEN               (0)
+#define SMACNPI_CONTROL_SET_TX_TICK__LEN          (2)
+#define SMACNPI_CONTROL_GET_IDENTIFIER__LEN       (0)
+#define SMACNPI_CONTROL_SET_LEDS__LEN             (1)
+
+/* NPI Control frame reply - status */
+#define SMACNPI_CONTROL_STATUS_OK                      (0x00)
+#define SMACNPI_CONTROL_STATUS_UNKNOWN_CMD             (0x01)
+#define SMACNPI_CONTROL_STATUS_MALFORMED_CTRL          (0x02)
+#define SMACNPI_CONTROL_STATUS_PARAMETER_OUT_OF_BOUNDS (0x03)
+#define SMACNPI_CONTROL_STATUS_FEATURE_NOT_IMPLEMENTED (0x04)
+#define SMACNPI_CONTROL_STATUS_ERROR                   (0x05)
+
+/* NPI internal buffering limits */
+#define SMACNPI_UARTREAD_FRAME_RING_DEPTH (6)  // can't be higher than 31, FYI
+#define SMACNPI_RFINBOUND_FRAME_RING_DEPTH (4) // this allocates a mailbox whose contents are ~7+SMAC_MAXIMUM_FRAMESIZE long.  Beware.
+#define SMACNPI_UARTWRITE_RING_SIZE (1024)
+#define SMACNPI_CONTROL_DATA_MAXLEN (8)
+#define SMACNPI_CONTROL_FRAME_PENDING (2)
+
+/* NPI default parameters */
+#define SMACNPI_RF_DEFAULT_CENTERFREQ (915000000)
+#define SMACNPI_RF_DEFAULT_TXPOWER    (-10)
+#define SMACNPI_SERIAL_BAUDRATE       (115200)
+
+/* NPI RTOS task threads */
+Void smacnpi_outboundRfTaskFxn(UArg arg0, UArg arg1);
+Void smacnpi_inboundRfTaskFxn(UArg arg0, UArg arg1);
+Void smacnpi_controlTaskFxn(UArg arg0, UArg arg1);
+#define SMACNPI_CONTROL_TASK_IS_SEPARATE_THREAD 0
+
+// TODO: smacnpi_transmitTick Clock tick issues SMac_requestTx
+
+/* NPI RTOS threads - stack sizes */
+#define SMACNPI_THREAD_OUTBOUNDRF_STACKSIZE 768
+#define SMACNPI_THREAD_INBOUNDRF_STACKSIZE 768
+#define SMACNPI_THREAD_CONTROL_STACKSIZE 1536
+
+/* NPI miscellaneous functions */
+Void smacnpi_uartread_callback(UART_Handle, Void *, size_t);
+Void smacnpi_uartwrite_callback(UART_Handle, Void *, size_t);
+Void smacnpi_rfRx(UInt32, UInt16, UInt8, Void *);
+
+
+#endif /* SMAC_NPI_H_ */

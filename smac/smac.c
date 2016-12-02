@@ -875,6 +875,9 @@ static Void SMac_MainTaskFxn(UArg arg0, UArg arg1)
 			UInt frIdx = 0, notifyCount = 0;
 			Int frRem, i;
 
+			#ifdef SMAC_DEBUG
+			System_printf("SMac_MainTaskFxn: SMAC_EVT_TXREQUESTED running\n"); System_flush();
+			#endif
 			if (pkt = SMac_util_getFirstTxEntry()) {
 				UInt32 dstAddr = pkt->destAddr, srcAddr = mac->rxAddresses[0];
 				_txBuffer[0] = (UInt8)dstAddr;
@@ -984,7 +987,12 @@ static Void SMac_MainTaskFxn(UArg arg0, UArg arg1)
 					SMac_util_clearTxQueue();
 					Semaphore_post(mac->binsem_TxEmpty);  // TX queue empty, signal anyone waiting for it
 				} /* if (frIdx > 8) */
-			} /* if (pkt = SMac_util_getFirstTxEntry()) */
+			} else { /* if (pkt = SMac_util_getFirstTxEntry()) */
+				Semaphore_post(mac->binsem_TxEmpty);  // TX queue empty, signal anyone waiting for it
+				#ifdef SMAC_DEBUG
+				System_printf("SMac_MainTaskFxn: SMAC_EVT_TXREQUESTED found no TX entries ready??\n"); System_flush();
+				#endif
+			}
 		} /* if (events & (UInt)SMAC_EVT_TXREQUESTED) */
 	} /* while (1) */
 }
