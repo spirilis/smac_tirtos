@@ -1,36 +1,6 @@
 /* smac_npi.h - SMac Network Processor Interface
  *
  * Header information
- *
- * Note: When creating a CCS project for the CC1310, CC1350 for the SMac NPI layer, please modify the
- * TI-RTOS .cfg file with the following - search for these statements and modify their values in-place
- * (don't just add these statements to the end of the .cfg file):
- *
- * 1. Recommend enabling error reporting e.g.:
- *    Error.policyFxn = Error.policyDefault;
- *    Error.raiseHook = Error.print;
- *    System.abortFxn = System.abortStd;
- *    System.exitFxn = System.exitStd;
- *
- * 2. Enable System_printf features:
- *    var SysMin = xdc.useModule('xdc.runtime.SysMin');
- *    SysMin.bufSize = 256;
- *    System.SupportProxy = SysMin;
- *
- * 3. Disable ROM usage by commenting out this section:
- *    var ROM = xdc.useModule('ti.sysbios.rom.ROM');
- *    if (Program.cpu.deviceName.match(/CC26/)) {
- *        ROM.romName = ROM.CC2650;
- *    }
- *    else if (Program.cpu.deviceName.match(/CC13/)) {
- *        ROM.romName = ROM.CC1350;
- *    }
- *
- * 4. Use a BIOS heap size of 3KB:
- *    BIOS.heapSize = 3072;
- *
- * 5. Use a Program.stack size of 1.5KB:
- *    Program.stack = 1536;
  */
 
 #ifndef SMAC_NPI_H_
@@ -143,7 +113,7 @@ Void smacnpi_controlTaskFxn(UArg arg0, UArg arg1);
 /* NPI miscellaneous functions */
 Void smacnpi_uartread_callback(UART_Handle, Void *, size_t);
 Void smacnpi_uartwrite_callback(UART_Handle, Void *, size_t);
-Void smacnpi_rfRx(UInt32, UInt16, UInt8, Void *);
+Void smacnpi_rfRx(Int8, UInt32, UInt16, UInt8, Void *);
 
 
 #endif /* SMAC_NPI_H_ */

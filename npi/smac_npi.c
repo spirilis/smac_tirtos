@@ -51,6 +51,7 @@ Mailbox_Handle controlInput;
 // Inbound RF - frame receiver
 // typedef void(*SMac_RxCallback)(UInt32 srcAddr, UInt16 programID, UInt8 payloadLen, Void *payload);  // Packet callback function type
 typedef struct {
+	Int8 rssi;
 	UInt32 srcAddr;
 	UInt16 programID;
 	UInt8 payloadLen;
@@ -169,7 +170,7 @@ inline UInt8 xor_buffer(Void *buf, size_t len) {
 	return xor;
 }
 
-inline UInt8 xor_packet(UInt32 addr, UInt16 prID, UInt8 payloadLen, Void *payload) {
+inline UInt8 xor_packet(UInt32 addr, UInt16 prID, Int8 rssi, UInt8 payloadLen, Void *payload) {
 	Int i;
 	UInt8 *cbuf = (UInt8 *)payload, xor;
 
@@ -179,6 +180,7 @@ inline UInt8 xor_packet(UInt32 addr, UInt16 prID, UInt8 payloadLen, Void *payloa
 	xor ^= (UInt8)(addr >> 24);
 	xor ^= (UInt8)prID;
 	xor ^= (UInt8)(prID >> 8);
+	xor ^= (UInt8)rssi;
 	xor ^= payloadLen;
 	for (i=0; i < payloadLen; i++) {
 		xor ^= cbuf[i];
@@ -223,8 +225,8 @@ Void smacnpi_uartread_callback(UART_Handle h, Void *data, size_t count)
 
 		if (uartInputFrameCurrentLen > 0) {
 			if (uartInputFrameTotalLen == 0) {
-				if (uartInputFrameCurrentLen == 7 && bufStart[0] == 0xAE) {
-					uartInputFrameTotalLen = 9 + *cdata;
+				if (uartInputFrameCurrentLen == 8 && bufStart[0] == 0xAE) {
+					uartInputFrameTotalLen = 10 + *cdata;
 				}
 				if (uartInputFrameCurrentLen == 2 && bufStart[0] == 0xBD) {
 					uartInputFrameTotalLen = 4 + *cdata;
@@ -239,7 +241,7 @@ Void smacnpi_uartread_callback(UART_Handle h, Void *data, size_t count)
 		// Check boundaries of uartInputFrameTotalLen for sanity's sake
 		if (uartInputFrameTotalLen > 0) {
 			if (bufStart[0] == 0xAE) {
-				if (uartInputFrameTotalLen > 9+SMAC_MAXIMUM_FRAMESIZE) {
+				if (uartInputFrameTotalLen > 10+SMAC_MAXIMUM_FRAMESIZE) {
 					uartInputFrameCurrentLen = 0;
 					uartInputFrameTotalLen = 0;
 					readNext = bufStart;
@@ -258,7 +260,7 @@ Void smacnpi_uartread_callback(UART_Handle h, Void *data, size_t count)
 			// Completed frame; verify checksum and send it on its way
 			UInt8 xor = xor_buffer(&bufStart[1], uartInputFrameCurrentLen-2); // ignore cksum char at the end & the StartChar when computing cksum
 			if (bufStart[0] == 0xAE) {
-				if (xor == bufStart[8+bufStart[7]]) {
+				if (xor == bufStart[9+bufStart[8]]) {
 					// If successful cksum, advance uartInputFrameCurrentRing to a new unused buffer, send current buffer to relevant Mailbox
 					// Advance uartInputFrameCurrentRing to a new unused buffer
 					frame.ringID = (UInt8)uartInputFrameCurrentRing;  // Save current buffer ring# before we modify it
@@ -275,8 +277,8 @@ Void smacnpi_uartread_callback(UART_Handle h, Void *data, size_t count)
 					if (i != SMACNPI_UARTREAD_FRAME_RING_DEPTH) {
 						frame.dstAddr = *((UInt32 *)(bufStart+1));
 						frame.programID = *((UInt16 *)(bufStart+5));
-						frame.length = bufStart[7];
-						frame.data = bufStart + 8;
+						frame.length = bufStart[8];
+						frame.data = bufStart + 9;
 						Mailbox_post(uartInputFrame, &frame, BIOS_NO_WAIT);
 						// Silently discards frame if mailbox is full
 						// TODO: Instrument any discards
@@ -325,10 +327,10 @@ Void smacnpi_inboundRfTaskFxn(UArg arg0, UArg arg1)
 
 	// Code which estimates how long we should pause to wait for the UART output ring buffer to flush enough to hold our next frame,
 	// if it's found to be full (or near-full) when we go to send an RX packet to the host.
-	if ( (9+SMAC_MAXIMUM_FRAMESIZE) * 10 > SMACNPI_SERIAL_BAUDRATE ) {
+	if ( (10+SMAC_MAXIMUM_FRAMESIZE) * 10 > SMACNPI_SERIAL_BAUDRATE ) {
 		waitTime = 100000;  // If a full frame can't be sent in the span of 1 second, just default to sleeping 100ms
 	} else {
-		waitTime = (9+SMAC_MAXIMUM_FRAMESIZE) * 10;  // Bits per full frame including Start and Stop bits
+		waitTime = (10+SMAC_MAXIMUM_FRAMESIZE) * 10;  // Bits per full frame including Start and Stop bits
 		waitTime = SMACNPI_SERIAL_BAUDRATE / waitTime;  // Obtain it as a fraction of serial bitrate
 		waitTime = 1000000 / waitTime;  // And divide into 1000000 to get # of microseconds per frame
 		if (waitTime < Clock_tickPeriod) {
@@ -351,15 +353,16 @@ Void smacnpi_inboundRfTaskFxn(UArg arg0, UArg arg1)
 			Task_sleep(waitTime / Clock_tickPeriod);
 		}
 		// Submit to UART write ring buffer
-		UInt32 i = 9+frame.payloadLen;  // total size of frame to be written
+		UInt32 i = 10+frame.payloadLen;  // total size of frame to be written
 		if (uartOutputRing_Capacity() >= i) {  // Should always test true thanks to our while() Task_sleep loop above
 			// Submit frame to UART output
-			UInt8 xor = xor_packet(frame.srcAddr, frame.programID, frame.payloadLen, frame.data);
+			UInt8 xor = xor_packet(frame.srcAddr, frame.programID, frame.rssi, frame.payloadLen, frame.data);
 			// XOR checksum calculated; submit packet
 			UInt8 startChar = 0xAE;
 			uartOutputRing_submit(&startChar, 1);
 			uartOutputRing_submit(&frame.srcAddr, 4);  // Arch native little-endian
 			uartOutputRing_submit(&frame.programID, 2); // Arch native little-endian
+			uartOutputRing_submit(&frame.rssi, 1);
 			uartOutputRing_submit(&frame.payloadLen, 1);
 			uartOutputRing_submit(&frame.data[0], frame.payloadLen);
 			uartOutputRing_submit(&xor, 1);
@@ -401,9 +404,10 @@ Void smacnpi_uartwrite_callback(UART_Handle h, Void *data, size_t count)
 }
 
 /* SMac callback - All RX frames */
-Void smacnpi_rfRx(UInt32 srcAddr, UInt16 programID, UInt8 payloadLen, Void *payload)
+Void smacnpi_rfRx(Int8 rssi, UInt32 srcAddr, UInt16 programID, UInt8 payloadLen, Void *payload)
 {
 	rfInboundFrame_t fr;
+	fr.rssi = rssi;
 	fr.srcAddr = srcAddr;
 	fr.programID = programID;
 	fr.payloadLen = payloadLen;

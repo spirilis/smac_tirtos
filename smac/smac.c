@@ -631,6 +631,7 @@ static Void SMac_MainTaskFxn(UArg arg0, UArg arg1)
 				#endif
 				UInt32 dstAddr, srcAddr;
 				UInt16 prID;
+				Int8 rssi;
 				Int16 fLen;
 				UInt8 pLen, *frm = &currentDataEntry->data;
 				if (currentDataEntry->config.lenSz == 1) {
@@ -647,7 +648,7 @@ static Void SMac_MainTaskFxn(UArg arg0, UArg arg1)
 					currentDataEntry = RFQueue_getDataEntry();
 					continue;  // Invalid or corrupted RX buffer entry?
 				}
-
+				rssi = frm[fLen-1];  // Extract 8-bit signed integer from the end
 				fLen--;  // There is an RSSI byte at the very end
 				if (fLen < 11) {
 					#ifdef SMAC_DEBUG
@@ -686,15 +687,15 @@ static Void SMac_MainTaskFxn(UArg arg0, UArg arg1)
 					SMac_RxCallback rxCb = SMac_util_getCallbackByProgramID(prID);
 					if (rxCb != NULL) {
 						#ifdef SMAC_DEBUG
-						System_printf("SMac_MainTaskFxn: SMAC_EVT_RX: exec rxCb srcAddr=%x, prID=%x, pLen=%d\n", srcAddr, prID, pLen); System_flush();
+						System_printf("SMac_MainTaskFxn: SMAC_EVT_RX: exec rxCb RSSI=%d, srcAddr=%x, prID=%x, pLen=%d\n", rssi, srcAddr, prID, pLen); System_flush();
 						#endif
-						rxCb(srcAddr, prID, pLen, frm);
+						rxCb(rssi, srcAddr, prID, pLen, frm);
 					}
 					if (mac->allProgramCallback != NULL) {
 						#ifdef SMAC_DEBUG
-						System_printf("SMac_MainTaskFxn: SMAC_EVT_RX: exec allProgramCallback srcAddr=%x, prID=%x, pLen=%d\n", srcAddr, prID, pLen); System_flush();
+						System_printf("SMac_MainTaskFxn: SMAC_EVT_RX: exec allProgramCallback RSSI=%d, srcAddr=%x, prID=%x, pLen=%d\n", rssi, srcAddr, prID, pLen); System_flush();
 						#endif
-						mac->allProgramCallback(srcAddr, prID, pLen, frm);
+						mac->allProgramCallback(rssi, srcAddr, prID, pLen, frm);
 					}
 					frm += pLen;
 					fLen -= 3 + pLen;
