@@ -31,6 +31,10 @@ This device ID should be unique within the realm of the SMac star network in que
 device ID should not be used alone; a unique identifier for the SMac star network in question should be included (e.g. RF center frequency, or a globally
 unique arbitrary ID such as the IEEE address of the base station's CC1310)
 
+If a node intends to transmit one of these frames, it is of utmost importance that the node verify its own Canonical Name is >0 bytes in size or else the
+recipient may mistake the frame for a request to query the recipient's canonical name instead.  For a truly "null" canonical name, use a single space (UTF-8
+character 32 decimal).
+
 ### Thermocouple
 I use thermocouples for measuring anything related to fire; smoker/grill temperature, roast temperature, woodstove flue and exterior stove temps.
 #### Program ID: 0x2001
