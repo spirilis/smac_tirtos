@@ -23,7 +23,9 @@ Payload: (variable):
 | Device ID | Canonical Name |
 
 * Device ID: 2-bytes, Little-Endian 16-bit Unsigned Integer gives a unique numeric ID for this device
-* Canonical Name: A variable-length character string describing the sensor, preferably including location.  A NUL terminating character is not expected.
+* Canonical Name: A variable-length character string describing the sensor, preferably including location.
+A NUL terminating character is not expected.
+An empty Canonical Name can be used by a base station to "query" a node's Device ID.
 
 This device ID should be unique within the realm of the SMac star network in question.  For external reporting applications (e.g. IoT Cloud, MQTT et al), the
 device ID should not be used alone; a unique identifier for the SMac star network in question should be included (e.g. RF center frequency, or a globally
