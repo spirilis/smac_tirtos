@@ -460,7 +460,7 @@ Void smacnpi_controlTaskFxn(UArg arg0, UArg arg1)
 	uartOutputInactive = Semaphore_handle(&uartOutputInactiveStruct);
 
 	// Set default runtime parameters
-	smacnpi_rf_on = true;
+	smacnpi_rf_on = SMACNPI_RF_DEFAULT_RX_ON;
 	smacnpi_host_squelched = false;
 	smacnpi_requesttx_tick = 100;
 	smacnpi_center_frequency = SMACNPI_RF_DEFAULT_CENTERFREQ;

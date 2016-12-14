@@ -28,8 +28,25 @@
 /* SMac API */
 #include <smac/smac.h>
 
-// Identification string for this NPI controller instance
+// Identification string for this NPI controller instance (<=SMACNPI_CONTROL_DATA_MAXLEN, which is 8 by default)
 #define SMACNPI_IDENTIFIER "RPIBSTN0"
+
+/* NPI default parameters */
+#define SMACNPI_RF_DEFAULT_CENTERFREQ (915000000)
+#define SMACNPI_RF_DEFAULT_TXPOWER    (0)  // 0dBm, range is -10, 0 to 12 or 14 with CCFG_FORCE_VDDR_HH=1
+#define SMACNPI_SERIAL_BAUDRATE       (115200)
+#define SMACNPI_RF_DEFAULT_RX_ON      (0)
+
+/* NPI internal buffering limits */
+#define SMACNPI_UARTREAD_FRAME_RING_DEPTH (6)  // can't be higher than 31, FYI
+#define SMACNPI_RFINBOUND_FRAME_RING_DEPTH (4) // this allocates a mailbox whose contents are ~7+SMAC_MAXIMUM_FRAMESIZE long.  Beware.
+#define SMACNPI_UARTWRITE_RING_SIZE (1024)
+#define SMACNPI_CONTROL_DATA_MAXLEN (8)
+#define SMACNPI_CONTROL_FRAME_PENDING (2)
+
+
+
+
 
 /* NPI Control Frame commands */
 #define SMACNPI_CONTROL_UNSQUELCH_HOST     (0x00)
@@ -84,18 +101,6 @@
 #define SMACNPI_CONTROL_STATUS_PARAMETER_OUT_OF_BOUNDS (0x03)
 #define SMACNPI_CONTROL_STATUS_FEATURE_NOT_IMPLEMENTED (0x04)
 #define SMACNPI_CONTROL_STATUS_ERROR                   (0x05)
-
-/* NPI internal buffering limits */
-#define SMACNPI_UARTREAD_FRAME_RING_DEPTH (6)  // can't be higher than 31, FYI
-#define SMACNPI_RFINBOUND_FRAME_RING_DEPTH (4) // this allocates a mailbox whose contents are ~7+SMAC_MAXIMUM_FRAMESIZE long.  Beware.
-#define SMACNPI_UARTWRITE_RING_SIZE (1024)
-#define SMACNPI_CONTROL_DATA_MAXLEN (8)
-#define SMACNPI_CONTROL_FRAME_PENDING (2)
-
-/* NPI default parameters */
-#define SMACNPI_RF_DEFAULT_CENTERFREQ (915000000)
-#define SMACNPI_RF_DEFAULT_TXPOWER    (-10)
-#define SMACNPI_SERIAL_BAUDRATE       (115200)
 
 /* NPI RTOS task threads */
 Void smacnpi_outboundRfTaskFxn(UArg arg0, UArg arg1);

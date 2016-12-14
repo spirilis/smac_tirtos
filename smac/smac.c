@@ -586,6 +586,7 @@ static Void SMac_MainTaskFxn(UArg arg0, UArg arg1)
 		System_printf("Polling events:\n"); System_flush();
 		#endif
 		UInt events = Event_pend(mac->mainTaskEvents, 0, SMAC_EVT_ALL, BIOS_WAIT_FOREVER);
+		System_printf("events = %x\n", events); System_flush();
 		// Process one by one
 		if (events & (UInt)SMAC_EVT_END) {
 			if (mac->rfEnable) {
@@ -772,7 +773,6 @@ static Void SMac_MainTaskFxn(UArg arg0, UArg arg1)
 						#endif
 						RF_flushCmd(mac->rfHandle, mac->rxCmdHandle, 1);
 						mac->rxCmdHandle = NULL;
-						RF_yield(mac->rfHandle);
 					}
 				}
 
