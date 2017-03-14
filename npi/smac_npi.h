@@ -25,6 +25,20 @@
 /* Board Header files */
 #include "Board.h"
 
+// LED definitions
+#ifndef Board_RLED
+#ifdef Board_PIN_RLED
+#define Board_RLED Board_PIN_RLED
+#endif
+#endif
+
+#ifndef Board_GLED
+#ifdef Board_PIN_GLED
+#define Board_GLED Board_PIN_GLED
+#endif
+#endif
+
+
 /* SMac API */
 #include <smac/smac.h>
 
