@@ -47,7 +47,13 @@
 #ifndef RF_QUEUE_H
 #define RF_QUEUE_H
 
-#include <driverlib/rf_data_entry.h>
+#ifdef DEVICE_FAMILY
+    #undef DEVICE_FAMILY_PATH
+    #define DEVICE_FAMILY_PATH(x) <ti/devices/DEVICE_FAMILY/x>
+#else
+    #error "You must define DEVICE_FAMILY at the project level as one of cc26x0, cc26x0r2, cc13x0, etc."
+#endif
+#include DEVICE_FAMILY_PATH(driverlib/rf_data_entry.h)
 
 #define RF_QUEUE_DATA_ENTRY_HEADER_SIZE  8 // Contant header size of a Generic Data Entry
 

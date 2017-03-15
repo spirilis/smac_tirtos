@@ -5,6 +5,14 @@
 #ifndef SMAC_SMAC_H_
 #define SMAC_SMAC_H_
 
+#ifdef DEVICE_FAMILY
+    #undef DEVICE_FAMILY_PATH
+    #define DEVICE_FAMILY_PATH(x) <ti/devices/DEVICE_FAMILY/x>
+#else
+    #error "You must define DEVICE_FAMILY at the project level as one of cc26x0, cc26x0r2, cc13x0, etc."
+#endif
+
+
 #include <xdc/std.h>
 #include <xdc/runtime/System.h>
 #include <xdc/runtime/Error.h>
@@ -14,7 +22,7 @@
 #include <ti/sysbios/knl/Event.h>
 #include <ti/sysbios/knl/Mailbox.h>
 #include <ti/drivers/rf/RF.h>
-#include <driverlib/rf_prop_mailbox.h>
+#include DEVICE_FAMILY_PATH(driverlib/rf_prop_mailbox.h)
 #include <smartrf_settings/smartrf_settings.h>
 #include "RFQueue.h"
 

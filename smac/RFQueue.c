@@ -40,7 +40,6 @@
 #include <stdint.h>
 #include <stdlib.h>
 
-#include <driverlib/rf_data_entry.h>
 #include "RFQueue.h"
 
 /* Receive entry pointer to keep track of read items */
