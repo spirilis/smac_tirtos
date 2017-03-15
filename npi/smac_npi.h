@@ -45,6 +45,10 @@
 // Identification string for this NPI controller instance (<=SMACNPI_CONTROL_DATA_MAXLEN, which is 8 by default)
 #define SMACNPI_IDENTIFIER "RPIBSTN0"
 
+// Control frame debugging
+#define SMACNPI_CTRL_DEBUG 1
+#define SMACNPI_CTRL_VERBOSE_DEBUG 0
+
 /* NPI default parameters */
 #define SMACNPI_RF_DEFAULT_CENTERFREQ (915000000)
 #define SMACNPI_RF_DEFAULT_TXPOWER    (0)  // 0dBm, range is -10, 0 to 12 or 14 with CCFG_FORCE_VDDR_HH=1

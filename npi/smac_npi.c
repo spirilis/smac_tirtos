@@ -492,7 +492,7 @@ Void smacnpi_controlTaskFxn(UArg arg0, UArg arg1)
 	uP.writeCallback = smacnpi_uartwrite_callback;
 	uP.readMode = UART_MODE_CALLBACK;
 	uP.readCallback = smacnpi_uartread_callback;
-	uart = UART_open(0, &uP);
+	uart = UART_open(Board_UART0, &uP);
 	if (uart == NULL) {
 		System_printf("Error running UART_open.  Cannot proceed.  Halting.\n");
 		System_flush();
@@ -570,8 +570,15 @@ Void smacnpi_controlTaskFxn(UArg arg0, UArg arg1)
 				if (!submitControlReplyFrame(fLen, ctlReplyBuffer)) {
 					System_printf("GET_RF reply: UART ring buffer overrun\n");
 					System_flush();
+				} else {
+                    #if SMACNPI_CTRL_DEBUG == 1
+				    System_printf("GET_RF: Replied\n"); System_flush();
+                    #endif
 				}
 			} else {
+                #if SMACNPI_CTRL_DEBUG == 1
+			    System_printf("GET_RF: Malformed CTRL frame\n"); System_flush();
+                #endif
 				sendSimpleCmdReply(ctlReplyBuffer, ctl.command, SMACNPI_CONTROL_STATUS_MALFORMED_CTRL);
 			}
 			break;
@@ -588,8 +595,14 @@ Void smacnpi_controlTaskFxn(UArg arg0, UArg arg1)
 				}
 				smacnpi_center_frequency = freq;
 				SMac_setFrequency(freq);
+                #if SMACNPI_CTRL_DEBUG == 1
+                System_printf("SET_CENTERFREQ: Set to %d\n", freq); System_flush();
+                #endif
 				sendSimpleCmdReply(ctlReplyBuffer, ctl.command, SMACNPI_CONTROL_STATUS_OK);
 			} else {
+                #if SMACNPI_CTRL_DEBUG == 1
+                System_printf("SET_CENTERFREQ: Malformed CTRL frame\n"); System_flush();
+                #endif
 				sendSimpleCmdReply(ctlReplyBuffer, ctl.command, SMACNPI_CONTROL_STATUS_MALFORMED_CTRL);
 			}
 			break;
@@ -597,13 +610,22 @@ Void smacnpi_controlTaskFxn(UArg arg0, UArg arg1)
 			if (ctl.length == SMACNPI_CONTROL_SET_TXPOWER__LEN) {
 				Int8 p = (Int8)ctl.data[0];
 				if (p < -10 || (p > -10 && p < 0) || (p > 14)) {
+                    #if SMACNPI_CTRL_DEBUG == 1
+                    System_printf("SET_TXPOWER: Value %d out of bounds\n", p); System_flush();
+                    #endif
 					sendSimpleCmdReply(ctlReplyBuffer, ctl.command, SMACNPI_CONTROL_STATUS_PARAMETER_OUT_OF_BOUNDS);
 				} else {
 					smacnpi_tx_power = p;
 					SMac_setTxPower(p);
+                    #if SMACNPI_CTRL_DEBUG == 1
+                    System_printf("SET_TXPOWER: Set to %d\n", p); System_flush();
+                    #endif
 					sendSimpleCmdReply(ctlReplyBuffer, ctl.command, SMACNPI_CONTROL_STATUS_OK);
 				}
 			} else {
+                #if SMACNPI_CTRL_DEBUG == 1
+                System_printf("SET_TXPOWER: Malformed CTRL frame\n"); System_flush();
+                #endif
 				sendSimpleCmdReply(ctlReplyBuffer, ctl.command, SMACNPI_CONTROL_STATUS_MALFORMED_CTRL);
 			}
 			break;
@@ -613,13 +635,22 @@ Void smacnpi_controlTaskFxn(UArg arg0, UArg arg1)
 					SMac_enableRx(0);
 					setLed(LED_GLED, 1);
 					updateLeds();
+                    #if SMACNPI_CTRL_DEBUG == 1
+                    System_printf("SET_RF_ON: 1\n"); System_flush();
+                    #endif
 				} else {
 					SMac_disableRx();
 					setLed(LED_GLED, 0);
 					updateLeds();
+                    #if SMACNPI_CTRL_DEBUG == 1
+                    System_printf("SET_RF_ON: 0\n"); System_flush();
+                    #endif
 				}
 				sendSimpleCmdReply(ctlReplyBuffer, ctl.command, SMACNPI_CONTROL_STATUS_OK);
 			} else {
+                #if SMACNPI_CTRL_DEBUG == 1
+                System_printf("SET_RF_ON: Malformed CTRL frame\n"); System_flush();
+                #endif
 				sendSimpleCmdReply(ctlReplyBuffer, ctl.command, SMACNPI_CONTROL_STATUS_MALFORMED_CTRL);
 			}
 			break;
@@ -627,8 +658,14 @@ Void smacnpi_controlTaskFxn(UArg arg0, UArg arg1)
 			if (ctl.length == SMACNPI_CONTROL_SET_ALTERNATE_ADDR__LEN) {
 				addr = *((UInt32 *)(&ctl.data[0]));
 				SMac_setAdditionalRxAddress(addr);
+                #if SMACNPI_CTRL_DEBUG == 1 && SMACNPI_CTRL_VERBOSE_DEBUG == 1
+                System_printf("SET_ALTERNATE_ADDR: Configured\n"); System_flush();
+                #endif
 				sendSimpleCmdReply(ctlReplyBuffer, ctl.command, SMACNPI_CONTROL_STATUS_OK);
 			} else {
+                #if SMACNPI_CTRL_DEBUG == 1
+                System_printf("SET_ALTERNATE_ADDR: Malformed CTRL frame\n"); System_flush();
+                #endif
 				sendSimpleCmdReply(ctlReplyBuffer, ctl.command, SMACNPI_CONTROL_STATUS_MALFORMED_CTRL);
 			}
 			break;
@@ -639,12 +676,18 @@ Void smacnpi_controlTaskFxn(UArg arg0, UArg arg1)
 				addr = SMac_getAdditionalRxAddress();
 				memcpy(tmpbuf+4, &addr, 4);
 
+                #if SMACNPI_CTRL_DEBUG == 1 && SMACNPI_CTRL_VERBOSE_DEBUG == 1
+                System_printf("GET_ADDRESSES: Replied\n"); System_flush();
+                #endif
 				fLen = composeControlReplyFrame(ctlReplyBuffer, ctl.command, SMACNPI_CONTROL_STATUS_OK, 8, tmpbuf);
 				if (!submitControlReplyFrame(fLen, ctlReplyBuffer)) {
 					System_printf("GET_ADDRESSES reply: UART ring buffer overrun\n");
 					System_flush();
 				}
 			} else {
+                #if SMACNPI_CTRL_DEBUG == 1
+                System_printf("GET_ADDRESSES: Malformed CTRL frame\n"); System_flush();
+                #endif
 				sendSimpleCmdReply(ctlReplyBuffer, ctl.command, SMACNPI_CONTROL_STATUS_MALFORMED_CTRL);
 			}
 			break;
@@ -653,13 +696,22 @@ Void smacnpi_controlTaskFxn(UArg arg0, UArg arg1)
 				toggleLed(LED_RLED);
 				updateLeds();
 				SMac_requestTx();
+                #if SMACNPI_CTRL_DEBUG == 1 && SMACNPI_CTRL_VERBOSE_DEBUG == 1
+                System_printf("RUN_TX: Mark\n"); System_flush();
+                #endif
 				if (SMac_pendTxQueue(1000)) {
 					sendSimpleCmdReply(ctlReplyBuffer, ctl.command, SMACNPI_CONTROL_STATUS_OK);
 				} else {
+                    #if SMACNPI_CTRL_DEBUG == 1 && SMACNPI_CTRL_VERBOSE_DEBUG == 1
+                    System_printf("RUN_TX: Timeout\n"); System_flush();
+                    #endif
 					sendSimpleCmdReply(ctlReplyBuffer, ctl.command, SMACNPI_CONTROL_STATUS_ERROR);
 				}
 				uartInputFrameRingMask = 0;  // Clear all ring buffers since we've transmitted everything
 			} else {
+                #if SMACNPI_CTRL_DEBUG == 1
+                System_printf("RUN_TX: Malformed CTRL frame\n"); System_flush();
+                #endif
 				sendSimpleCmdReply(ctlReplyBuffer, ctl.command, SMACNPI_CONTROL_STATUS_MALFORMED_CTRL);
 			}
 			break;
@@ -667,8 +719,14 @@ Void smacnpi_controlTaskFxn(UArg arg0, UArg arg1)
 			if (ctl.length == SMACNPI_CONTROL_SET_TX_TICK__LEN) {
 				// Not implemented yet
 				// TODO
+                #if SMACNPI_CTRL_DEBUG == 1
+                System_printf("SET_TX_TICK: Unimplemented function\n"); System_flush();
+                #endif
 				sendSimpleCmdReply(ctlReplyBuffer, ctl.command, SMACNPI_CONTROL_STATUS_FEATURE_NOT_IMPLEMENTED);
 			} else {
+                #if SMACNPI_CTRL_DEBUG == 1
+                System_printf("SET_TX_TICK: Malformed CTRL frame\n"); System_flush();
+                #endif
 				sendSimpleCmdReply(ctlReplyBuffer, ctl.command, SMACNPI_CONTROL_STATUS_MALFORMED_CTRL);
 			}
 			break;
@@ -692,6 +750,9 @@ Void smacnpi_controlTaskFxn(UArg arg0, UArg arg1)
 							ctlReplyBuffer[fLen-1]); System_flush();
 				}
 			} else {
+                #if SMACNPI_CTRL_DEBUG == 1
+                System_printf("GET_IDENTIFIER: Malformed CTRL frame\n"); System_flush();
+                #endif
 				sendSimpleCmdReply(ctlReplyBuffer, ctl.command, SMACNPI_CONTROL_STATUS_MALFORMED_CTRL);
 			}
 			break;
@@ -699,12 +760,21 @@ Void smacnpi_controlTaskFxn(UArg arg0, UArg arg1)
 			if (ctl.length == SMACNPI_CONTROL_SET_LEDS__LEN) {
 				if (ctl.data[0] != 0) {
 					setAllLeds(1);
+                    #if SMACNPI_CTRL_DEBUG == 1
+                    System_printf("SET_LEDS: 1\n"); System_flush();
+                    #endif
 				} else {
 					setAllLeds(0);
+                    #if SMACNPI_CTRL_DEBUG == 1
+                    System_printf("SET_LEDS: 1\n"); System_flush();
+                    #endif
 				}
 				updateLeds();
 				sendSimpleCmdReply(ctlReplyBuffer, ctl.command, SMACNPI_CONTROL_STATUS_OK);
 			} else {
+                #if SMACNPI_CTRL_DEBUG == 1
+                System_printf("SET_LEDS: Malformed CTRL frame\n"); System_flush();
+                #endif
 				sendSimpleCmdReply(ctlReplyBuffer, ctl.command, SMACNPI_CONTROL_STATUS_MALFORMED_CTRL);
 			}
 		default:
