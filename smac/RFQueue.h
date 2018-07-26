@@ -47,6 +47,15 @@
 #ifndef RF_QUEUE_H
 #define RF_QUEUE_H
 
+#ifndef DEVICE_FAMILY
+#ifdef DeviceFamily_CC13X0
+#define DEVICE_FAMILY cc13x0
+#endif
+#ifdef DeviceFamily_CC13X2
+#define DEVICE_FAMILY cc13x2
+#endif
+#endif
+
 #ifdef DEVICE_FAMILY
     #undef DEVICE_FAMILY_PATH
     #define DEVICE_FAMILY_PATH(x) <ti/devices/DEVICE_FAMILY/x>

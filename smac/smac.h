@@ -5,6 +5,15 @@
 #ifndef SMAC_SMAC_H_
 #define SMAC_SMAC_H_
 
+#ifndef DEVICE_FAMILY
+#ifdef DeviceFamily_CC13X0
+#define DEVICE_FAMILY cc13x0
+#endif
+#ifdef DeviceFamily_CC13X2
+#define DEVICE_FAMILY cc13x2
+#endif
+#endif
+
 #ifdef DEVICE_FAMILY
     #undef DEVICE_FAMILY_PATH
     #define DEVICE_FAMILY_PATH(x) <ti/devices/DEVICE_FAMILY/x>
@@ -16,6 +25,7 @@
 #include <xdc/std.h>
 #include <xdc/runtime/System.h>
 #include <xdc/runtime/Error.h>
+#include <ti/sysbios/BIOS.h>
 #include <ti/sysbios/knl/Task.h>
 #include <ti/sysbios/knl/Clock.h>
 #include <ti/sysbios/knl/Semaphore.h>
